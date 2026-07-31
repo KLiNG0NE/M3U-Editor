@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U-Editor</title>
+    
+    <!-- SVG Favicon (Orangefarbener TV) -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f59e0b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='7' width='20' height='15' rx='2' ry='2'%3E%3C/rect%3E%3Cpolyline points='17 2 12 7 7 2'%3E%3C/polyline%3E%3C/svg%3E">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#0f0f0f',
+                        surface: '#181818',
+                        card: '#222222',
+                        elevated: '#2c2c2c',
+                        border: '#333333',
+                        'border-light': '#444444',
+                        accent: '#f59e0b',
+                        'accent-hover': '#d97706',
+                        'accent-dim': 'rgba(245,158,11,0.12)',
+                        danger: '#ef4444',
+                        'danger-dim': 'rgba(239,68,68,0.12)',
+                        success: '#22c55e',
+                        'success-dim': 'rgba(34,197,94,0.12)',
+                        radio: '#06b6d4',
+                        'radio-dim': 'rgba(6,182,212,0.12)',
+                    },
+                    fontFamily: {
+                        display: ['Outfit', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        body { font-family: 'Outfit', sans-serif; background: #0f0f0f; color: #e0e0e0; margin: 0; overflow: hidden; height: 100vh; }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        .drag-over-top { border-top: 2px solid #f59e0b !important; }
+        .drag-over-bottom { border-bottom: 2px solid #f59e0b !important; }
+        .drag-over-group { border-left: 3px solid #f59e0b !important; background: rgba(245,158,11,0.08) !important; }
+        .dragging { opacity: 0.4; }
+
+        #dropOverlay {
+            display: none; position: fixed; inset: 0; z-index: 9999;
+            background: rgba(245,158,11,0.08); border: 3px dashed #f59e0b;
+            align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+        }
+        #dropOverlay.active { display: flex; }
+
+        @keyframes toastIn { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes toastOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(120%); opacity: 0; } }
+        .toast-enter { animation: toastIn 0.3s ease-out forwards; }
+        .toast-exit { animation: toastOut 0.3s ease-in forwards; }
+
+        @keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+        .modal-enter { animation: modalIn 0.2s ease-out forwards; }
+
+        @keyframes warnPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.25); }
+            50% { box-shadow: 0 0 0 12px rgba(239,68,68,0); }
+        }
+        .warn-pulse { animation: warnPulse 1.8s ease-in-out infinite; }
+
+        .logo-placeholder {
+            width: 40px; height: 40px; border-radius: 6px; background: #2c2c2c;
+            display: flex; align-items: center; justify-content: center;
+            color: #666; font-size: 14px; flex-shrink: 0;
+        }
+
+        .input-field {
+            background: #181818; border: 1px solid #333; color: #e0e0e0; border-radius: 8px;
+            padding: 8px 12px; font-family: 'Outfit', sans-serif; font-size: 14px;
+            transition: border-color 0.2s, box-shadow 0.2s; width: 100%; outline: none;
+        }
+        .input-field:focus { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
+        .input-field::placeholder { color: #666; }
+        .input-mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+        .btn {
+            display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
+            border-radius: 8px; font-family: 'Outfit', sans-serif; font-size: 14px;
+            font-weight: 500; cursor: pointer; border: none; transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .btn-primary { background: #f59e0b; color: #111; }
+        .btn-primary:hover { background: #d97706; transform: translateY(-1px); }
+        .btn-ghost { background: transparent; color: #aaa; border: 1px solid #333; }
+        .btn-ghost:hover { background: #222; color: #e0e0e0; border-color: #444; }
+        .btn-danger { background: rgba(239,68,68,0.15); color: #ef4444; }
+        .btn-danger:hover { background: rgba(239,68,68,0.25); }
+        .btn-danger-solid { background: #ef4444; color: #fff; }
+        .btn-danger-solid:hover { background: #dc2626; transform: translateY(-1px); }
+        .btn-sm { padding: 5px 10px; font-size: 13px; border-radius: 6px; }
+        .btn-icon { padding: 6px; width: 32px; height: 32px; justify-content: center; border-radius: 6px; }
+
+        .group-item {
+            display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+            border-radius: 8px; cursor: pointer; transition: all 0.15s; position: relative;
+            border-left: 3px solid transparent;
+        }
+        .group-item:hover { background: #222; }
+        .group-item.active { background: rgba(245,158,11,0.1); color: #f59e0b; border-left-color: #f59e0b; }
+        .group-item .group-actions { display: none; gap: 2px; }
+        .group-item:hover .group-actions { display: flex; }
+
+        .channel-row {
+            display: grid; grid-template-columns: 36px 44px 1fr 120px 60px 36px 100px;
+            align-items: center; gap: 10px; padding: 8px 16px;
+            border-bottom: 1px solid #222; transition: background 0.1s; min-height: 56px;
+        }
+        .channel-row:hover { background: #1e1e1e; }
+        .channel-row.selected { background: rgba(245,158,11,0.06); }
+
+        .channel-card {
+            background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 10px;
+            padding: 16px; transition: all 0.15s; cursor: pointer;
+        }
+        .channel-card:hover { border-color: #444; transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+        .channel-card.selected { border-color: #f59e0b; background: rgba(245,158,11,0.06); }
+
+        .field-label {
+            font-size: 12px; font-weight: 500; color: #888; margin-bottom: 4px;
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+
+        .badge {
+            display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 4px;
+            font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+        }
+
+        .bg-glow {
+            position: fixed; width: 500px; height: 500px; border-radius: 50%;
+            filter: blur(150px); opacity: 0.03; pointer-events: none; z-index: 0;
+        }
+
+        .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; text-align: center; }
+
+        .custom-check {
+            width: 18px; height: 18px; border: 2px solid #444; border-radius: 4px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s; flex-shrink: 0;
+        }
+        .custom-check.checked { background: #f59e0b; border-color: #f59e0b; }
+        .custom-check.checked::after { content: '\2713'; color: #111; font-size: 12px; font-weight: 700; }
+
+        .table-header {
+            display: grid; grid-template-columns: 36px 44px 1fr 120px 60px 36px 100px;
+            gap: 10px; padding: 8px 16px; font-size: 11px; font-weight: 600;
+            color: #666; text-transform: uppercase; letter-spacing: 0.5px;
+            border-bottom: 1px solid #333; background: #151515; position: sticky; top: 0; z-index: 5;
+        }
+
+        .epg-url-row {
+            display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+            background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px;
+            transition: border-color 0.15s;
+        }
+        .epg-url-row:hover { border-color: #444; }
+
+        .epg-indicator { position: relative; cursor: pointer; }
+        .epg-indicator .epg-dot {
+            position: absolute; top: -1px; right: -1px; width: 8px; height: 8px;
+            background: #22c55e; border-radius: 50%; border: 2px solid #181818;
+        }
+
+        .sidebar-divider { margin: 8px 12px; border-top: 1px solid #2a2a2a; }
+        .sidebar-label { padding: 4px 12px 2px; font-size: 10px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.08em; }
+
+        .radio-icon { color: #06b6d4; font-size: 11px; }
+
+        .toggle-wrap { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+        .toggle-track {
+            width: 40px; height: 22px; border-radius: 11px; background: #333;
+            position: relative; transition: background 0.2s; flex-shrink: 0;
+        }
+        .toggle-track.on { background: #06b6d4; }
+        .toggle-thumb {
+            width: 18px; height: 18px; border-radius: 50%; background: #fff;
+            position: absolute; top: 2px; left: 2px; transition: transform 0.2s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        .toggle-track.on .toggle-thumb { transform: translateX(18px); }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+        }
+    </style>
+</head>
+<body class="bg-bg text-gray-200">
+
+    <div class="bg-glow" style="top:-200px;left:-100px;background:#f59e0b;"></div>
+    <div class="bg-glow" style="bottom:-200px;right:-100px;background:#06b6d4;"></div>
+
+    <div id="dropOverlay">
+        <i class="fa-solid fa-file-import text-accent text-5xl"></i>
+        <p class="text-xl font-semibold text-accent">M3U-Datei hier ablegen</p>
+        <p class="text-sm text-gray-500">Datei wird automatisch importiert</p>
+    </div>
+
+    <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2" style="max-width:380px;"></div>
+
+    <div class="flex flex-col h-screen relative z-10">
+
+        <!-- Header -->
+        <header class="flex items-center gap-4 px-5 py-3 border-b border-border bg-surface/80 backdrop-blur-md" style="flex-shrink:0;">
+            <div class="flex items-center gap-3 mr-4">
+                <div class="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
+                    <i class="fa-solid fa-tv text-bg text-sm"></i>
+                </div>
+                <h1 class="text-lg font-bold tracking-tight hidden sm:block">M3U-Editor</h1>
+            </div>
+            <div class="relative flex-1 max-w-md">
+                <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
+                <input type="text" id="searchInput" placeholder="Sender suchen..." class="input-field pl-9 py-2 text-sm" aria-label="Sender suchen">
+            </div>
+            <div class="flex items-center gap-2 ml-auto">
+                <div class="epg-indicator" onclick="openEpgModal()" title="EPG-Quellen verwalten (x-tvg-url)">
+                    <button class="btn btn-ghost btn-sm"><i class="fa-solid fa-calendar-days"></i><span class="hidden md:inline">EPG</span></button>
+                    <span id="epgDot" class="epg-dot hidden"></span>
+                </div>
+                <button onclick="addChannel()" class="btn btn-ghost btn-sm" title="Neuer Sender (Strg+N)"><i class="fa-solid fa-plus"></i><span class="hidden md:inline">Neu</span></button>
+                <button onclick="importFile()" class="btn btn-ghost btn-sm" title="Importieren (Strg+O)"><i class="fa-solid fa-file-import"></i><span class="hidden md:inline">Import</span></button>
+                <button onclick="exportFile()" class="btn btn-primary btn-sm" title="Exportieren (Strg+S)"><i class="fa-solid fa-file-export"></i><span class="hidden md:inline">Export</span></button>
+            </div>
+        </header>
+
+        <!-- Body -->
+        <div class="flex flex-1 overflow-hidden">
+            <aside id="sidebar" class="w-60 flex-shrink-0 border-r border-border bg-surface/50 flex flex-col overflow-hidden">
+                <div class="p-3 flex-1 overflow-y-auto">
+                    <div class="group-item active" data-group="__all__" onclick="selectGroup('__all__')" draggable="false">
+                        <i class="fa-solid fa-globe text-sm w-5 text-center"></i>
+                        <span class="flex-1 text-sm font-medium">Alle Sender</span>
+                        <span id="countAll" class="text-xs text-gray-500 font-mono">0</span>
+                    </div>
+                    <div class="group-item" data-group="__tv__" onclick="selectGroup('__tv__')" draggable="false">
+                        <i class="fa-solid fa-tv text-sm w-5 text-center"></i>
+                        <span class="flex-1 text-sm font-medium">TV-Sender</span>
+                        <span id="countTv" class="text-xs text-gray-500 font-mono">0</span>
+                    </div>
+                    <div class="group-item" data-group="__radio__" onclick="selectGroup('__radio__')" draggable="false">
+                        <i class="fa-solid fa-radio text-sm w-5 text-center" style="color:#06b6d4;"></i>
+                        <span class="flex-1 text-sm font-medium">Radio-Sender</span>
+                        <span id="countRadio" class="text-xs text-gray-500 font-mono">0</span>
+                    </div>
+                    <div class="group-item" data-group="__ungrouped__" onclick="selectGroup('__ungrouped__')" draggable="false" ondragover="sidebarGroupDragOver(event)" ondragleave="sidebarGroupDragLeave(event)" ondrop="sidebarGroupDrop(event, '__ungrouped__')">
+                        <i class="fa-solid fa-question text-sm w-5 text-center"></i>
+                        <span class="flex-1 text-sm font-medium">Ohne Gruppe</span>
+                        <span id="countUngrouped" class="text-xs text-gray-500 font-mono">0</span>
+                    </div>
+                    <div class="sidebar-divider"></div>
+                    <p class="sidebar-label">Gruppen <span class="text-gray-700 normal-case tracking-normal">(Drag & Drop möglich)</span></p>
+                    <div id="groupList"></div>
+                </div>
+                <div class="p-3 border-t border-border">
+                    <button onclick="addGroup()" class="btn btn-ghost btn-sm w-full justify-center"><i class="fa-solid fa-folder-plus"></i> Gruppe hinzufügen</button>
+                </div>
+            </aside>
+
+            <main class="flex-1 flex flex-col overflow-hidden">
+                <div class="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface/30" style="flex-shrink:0;">
+                    <span id="toolbarInfo" class="text-sm text-gray-400 flex-1 truncate"></span>
+                    <select id="sortSelect" onchange="applySort()" class="input-field py-1 px-2 text-xs w-40" aria-label="Sortierung">
+                        <option value="default">Reihenfolge behalten</option>
+                        <option value="name-asc">Name A-Z</option>
+                        <option value="name-desc">Name Z-A</option>
+                        <option value="chno-asc">Kanalnr. aufsteigend</option>
+                        <option value="chno-desc">Kanalnr. absteigend</option>
+                    </select>
+                    <div class="flex border border-border rounded-lg overflow-hidden">
+                        <button onclick="setView('table')" id="viewTable" class="px-3 py-1 text-xs bg-accent text-bg" title="Tabellenansicht"><i class="fa-solid fa-list"></i></button>
+                        <button onclick="setView('cards')" id="viewCards" class="px-3 py-1 text-xs text-gray-500 hover:text-gray-300" title="Kartenansicht"><i class="fa-solid fa-grip"></i></button>
+                    </div>
+                    <div id="batchBar" class="hidden items-center gap-2 border-l border-border pl-3 ml-1">
+                        <span id="batchCount" class="text-xs text-accent font-mono"></span>
+                        <select id="batchGroup" class="input-field py-1 px-2 text-xs w-32" aria-label="Gruppe zuweisen"><option value="">Gruppe zuweisen...</option></select>
+                        <button onclick="batchSetGroup()" class="btn btn-ghost btn-sm" style="padding:4px 8px;font-size:12px;">OK</button>
+                        <button onclick="batchToggleRadio()" class="btn btn-ghost btn-sm" style="padding:4px 8px;font-size:12px;color:#06b6d4;border-color:#06b6d4;" title="Radio-Flag umschalten"><i class="fa-solid fa-radio"></i></button>
+                        <button onclick="batchDelete()" class="btn btn-danger btn-sm" style="padding:4px 8px;font-size:12px;" title="Ausgewählte löschen"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                </div>
+                <div id="channelContainer" class="flex-1 overflow-y-auto"></div>
+            </main>
+        </div>
+
+        <footer class="flex items-center justify-between px-5 py-2 border-t border-border bg-surface/50 text-xs text-gray-600" style="flex-shrink:0;">
+            <span id="footerStats"></span>
+            <span>Drag & Drop zum Sortieren / M3U ablegen zum Importieren</span>
+        </footer>
+    </div>
+
+    <!-- Bestätigungs-Modal -->
+    <div id="confirmModal" class="fixed inset-0 z-50 hidden items-center justify-center p-4" style="background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);">
+        <div class="modal-enter bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl">
+            <div class="p-6 text-center">
+                <div class="w-16 h-16 rounded-full bg-danger-dim flex items-center justify-center mx-auto mb-4 warn-pulse">
+                    <i class="fa-solid fa-triangle-exclamation text-danger text-2xl"></i>
+                </div>
+                <h2 id="confirmTitle" class="text-lg font-bold mb-2">Löschen bestätigen</h2>
+                <p id="confirmMessage" class="text-sm text-gray-400 leading-relaxed"></p>
+                <div id="confirmDetails" class="mt-3 p-3 rounded-lg bg-bg border border-border text-left hidden"></div>
+            </div>
+            <div class="flex items-center justify-center gap-3 px-6 pb-6">
+                <button id="confirmCancel" class="btn btn-ghost px-8" onclick="closeConfirm()">Abbrechen</button>
+                <button id="confirmOk" class="btn btn-danger-solid px-8"><i class="fa-solid fa-trash"></i> Löschen</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EPG-Modal -->
+    <div id="epgModal" class="fixed inset-0 z-40 hidden items-center justify-center p-4" style="background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);">
+        <div class="modal-enter bg-card border border-border rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-2xl">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-border">
+                <div>
+                    <h2 class="text-lg font-bold">EPG-Quellen verwalten</h2>
+                    <p class="text-xs text-gray-500 mt-0.5">x-tvg-url Attribute in der #EXTM3U-Zeile</p>
+                </div>
+                <button onclick="closeEpgModal()" class="btn btn-icon btn-ghost" aria-label="Schließen"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="flex-1 overflow-y-auto px-6 py-4">
+                <div id="epgUrlList" class="flex flex-col gap-2 mb-4"></div>
+                <div class="border-t border-border pt-4">
+                    <label class="field-label">Neue EPG-URL hinzufügen</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="newEpgUrl" class="input-field input-mono flex-1" placeholder="http://epg-provider.de/epg.xml.gz" onkeydown="if(event.key==='Enter')addEpgUrl()">
+                        <button onclick="addEpgUrl()" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus"></i> Hinzufügen</button>
+                    </div>
+                </div>
+                <div class="mt-4 p-3 rounded-lg bg-elevated/50 border border-border">
+                    <p class="text-[11px] text-gray-500 leading-relaxed">
+                        <i class="fa-solid fa-circle-info text-gray-600 mr-1"></i>
+                        Diese URLs werden als <code class="text-gray-400 font-mono bg-bg px-1 rounded">x-tvg-url="..."</code> in die <code class="text-gray-400 font-mono bg-bg px-1 rounded">#EXTM3U</code>-Kopfzeile geschrieben.
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
+                <button onclick="closeEpgModal()" class="btn btn-ghost">Schließen</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sender Bearbeiten Modal -->
+    <div id="editModal" class="fixed inset-0 z-40 hidden items-center justify-center p-4" style="background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);">
+        <div class="modal-enter bg-card border border-border rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-border">
+                <h2 id="editModalTitle" class="text-lg font-bold">Sender bearbeiten</h2>
+                <button onclick="closeEditModal()" class="btn btn-icon btn-ghost" aria-label="Schließen"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="flex-1 overflow-y-auto px-6 py-5">
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2 flex items-center gap-4 p-3 rounded-lg bg-elevated/50 border border-border">
+                        <div class="toggle-wrap" onclick="toggleRadioEdit()">
+                            <div id="radioToggle" class="toggle-track"><div class="toggle-thumb"></div></div>
+                        </div>
+                        <div>
+                            <span id="radioToggleLabel" class="text-sm font-medium">TV-Sender</span>
+                            <p class="text-[11px] text-gray-500">radio="true" in der M3U-Datei setzen</p>
+                        </div>
+                    </div>
+                    <div class="col-span-2"><label class="field-label">Sendername</label><input type="text" id="editName" class="input-field" placeholder="z.B. Das Erste"></div>
+                    <div class="col-span-2"><label class="field-label">Stream-URL</label><input type="text" id="editUrl" class="input-field input-mono" placeholder="http://..."></div>
+                    <div class="col-span-2">
+                        <label class="field-label">tvg-logo</label>
+                        <div class="flex gap-3 items-start">
+                            <img id="editLogoPreview" src="" alt="" class="w-12 h-12 rounded-lg bg-elevated object-contain hidden flex-shrink-0">
+                            <div class="flex-1"><input type="text" id="editLogo" class="input-field input-mono" placeholder="https://logo.url/bild.png" oninput="updateLogoPreview()"></div>
+                        </div>
+                    </div>
+                    <div class="col-span-2 my-1 border-t border-border"></div>
+                    <p class="col-span-2 text-[10px] font-semibold text-gray-600 uppercase tracking-widest">TVG-Eigenschaften</p>
+                    <div><label class="field-label">tvg-id</label><input type="text" id="editTvgId" class="input-field input-mono" placeholder="SenderID"></div>
+                    <div><label class="field-label">tvg-name</label><input type="text" id="editTvgName" class="input-field" placeholder="Anzeigename"></div>
+                    <div><label class="field-label">tvg-language</label><input type="text" id="editTvgLanguage" class="input-field" placeholder="de, en, ..."></div>
+                    <div><label class="field-label">tvg-country</label><input type="text" id="editTvgCountry" class="input-field" placeholder="DE, AT, CH, ..."></div>
+                    <div><label class="field-label">tvg-genre</label><input type="text" id="editTvgGenre" class="input-field" placeholder="Sport, Nachrichten, ..."></div>
+                    <div><label class="field-label">tvg-chno</label><input type="number" id="editTvgChno" class="input-field" placeholder="1"></div>
+                    <div><label class="field-label">tvg-shift</label><input type="number" id="editTvgShift" class="input-field" placeholder="0" step="0.5"></div>
+                    <div><label class="field-label">tvg-url (EPG je Sender)</label><input type="text" id="editTvgUrl" class="input-field input-mono" placeholder="http://epg-url"></div>
+                    <div><label class="field-label">tvg-guide</label><input type="text" id="editTvgGuide" class="input-field input-mono" placeholder="Guide-ID"></div>
+                    <div><label class="field-label">tvg-source</label><input type="text" id="editTvgSource" class="input-field" placeholder="Quellangabe"></div>
+                    <div class="flex items-end pb-1"><label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="editTvgRec" class="w-4 h-4 accent-accent rounded"><span class="text-sm text-gray-300">tvg-rec (Aufnahme)</span></label></div>
+                    <div class="col-span-2 my-1 border-t border-border"></div>
+                    <div class="col-span-2">
+                        <label class="field-label">group-title</label>
+                        <div class="flex gap-2">
+                            <select id="editGroup" class="input-field flex-1" onchange="toggleNewGroupInput()"><option value="">-- keine Gruppe --</option></select>
+                            <input type="text" id="editNewGroup" class="input-field flex-1 hidden" placeholder="Neue Gruppe eingeben...">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
+                <button onclick="closeEditModal()" class="btn btn-ghost">Abbrechen</button>
+                <button onclick="saveChannel()" class="btn btn-primary">Speichern</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gruppe Modal -->
+    <div id="groupModal" class="fixed inset-0 z-40 hidden items-center justify-center p-4" style="background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);">
+        <div class="modal-enter bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+                <h2 id="groupModalTitle" class="text-base font-bold">Gruppe erstellen</h2>
+                <button onclick="closeGroupModal()" class="btn btn-icon btn-ghost" aria-label="Schließen"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="px-5 py-4">
+                <label class="field-label">Gruppenname</label>
+                <input type="text" id="groupModalInput" class="input-field" placeholder="z.B. Sport" onkeydown="if(event.key==='Enter')saveGroup()">
+            </div>
+            <div class="flex items-center justify-end gap-3 px-5 py-4 border-t border-border">
+                <button onclick="closeGroupModal()" class="btn btn-ghost btn-sm">Abbrechen</button>
+                <button onclick="saveGroup()" class="btn btn-primary btn-sm">Speichern</button>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="fileInput" accept=".m3u,.m3u8,.txt" class="hidden" onchange="handleFileSelect(event)">
+
+    <script>
+    /* ========================================================
+       ZUSTAND
+    ======================================================== */
+    const state = {
+        channels: [], epgUrls: [],
+        selectedGroup: '__all__', searchQuery: '',
+        selectedIds: new Set(), sortOrder: 'default', viewMode: 'table',
+        editChannelId: null, editRadio: false,
+        editGroupMode: 'create', editGroupOldName: '',
+        groupOrder: [], dragSrcId: null,
+        pendingConfirmAction: null,
+    };
+
+    let idCounter = 0;
+    function genId() { return 'ch_' + (++idCounter) + '_' + Date.now(); }
+    function isRadio(ch) { return ch.radio === true || ch.radio === 'true' || ch.radio === '1'; }
+
+    /* ========================================================
+       BESTÄTIGUNGS-MODAL
+    ======================================================== */
+    function showConfirm(title, message, details, onConfirm) {
+        document.getElementById('confirmTitle').textContent = title;
+        document.getElementById('confirmMessage').textContent = message;
+
+        const detailsEl = document.getElementById('confirmDetails');
+        if (details) {
+            detailsEl.innerHTML = details;
+            detailsEl.classList.remove('hidden');
+        } else {
+            detailsEl.innerHTML = '';
+            detailsEl.classList.add('hidden');
+        }
+
+        state.pendingConfirmAction = onConfirm;
+        document.getElementById('confirmOk').onclick = () => {
+            const actionToExecute = state.pendingConfirmAction;
+            closeConfirm();
+            if (actionToExecute) actionToExecute();
+        };
+
+        document.getElementById('confirmModal').classList.remove('hidden');
+        document.getElementById('confirmModal').classList.add('flex');
+        setTimeout(() => document.getElementById('confirmCancel').focus(), 100);
+    }
+
+    function closeConfirm() {
+        document.getElementById('confirmModal').classList.add('hidden');
+        document.getElementById('confirmModal').classList.remove('flex');
+        state.pendingConfirmAction = null;
+    }
+
+    /* ========================================================
+       M3U PARSER & GENERATOR
+    ======================================================== */
+    function parseM3U(text) {
+        // Entferne BOM am Anfang falls vorhanden
+        if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+        const lines = text.split(/\r?\n/).map(l => l.trim());
+        const channels = [], epgUrls = [];
+        let cur = null;
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line) continue;
+            if (line.startsWith('#EXTM3U')) {
+                const re = /x-tvg-url\s*=\s*"([^"]*)"/g; let m;
+                while ((m = re.exec(line)) !== null) { if (m[1] && !epgUrls.includes(m[1])) epgUrls.push(m[1]); }
+                continue;
+            }
+            if (line.startsWith('#EXTINF:')) {
+                cur = { id: genId(), name:'', url:'', radio:false, tvg:{id:'',name:'',logo:'',language:'',country:'',url:'',shift:'',chno:'',rec:'',guide:'',source:'',genre:''}, group:'' };
+                const lastComma = line.lastIndexOf(',');
+                if (lastComma !== -1) {
+                    cur.name = line.substring(lastComma + 1).trim();
+                    const re = /([\w][\w-]*)\s*=\s*"([^"]*)"/g; let m;
+                    while ((m = re.exec(line.substring(8, lastComma))) !== null) {
+                        const k=m[1], v=m[2];
+                        switch(k) {
+                            case 'tvg-id': cur.tvg.id=v; break; case 'tvg-name': cur.tvg.name=v; break;
+                            case 'tvg-logo': cur.tvg.logo=v; break; case 'tvg-language': cur.tvg.language=v; break;
+                            case 'tvg-country': cur.tvg.country=v; break; case 'tvg-url': cur.tvg.url=v; break;
+                            case 'tvg-shift': cur.tvg.shift=v; break; case 'tvg-chno': cur.tvg.chno=v; break;
+                            case 'tvg-rec': cur.tvg.rec=v; break; case 'tvg-guide': cur.tvg.guide=v; break;
+                            case 'tvg-source': cur.tvg.source=v; break; case 'tvg-genre': cur.tvg.genre=v; break;
+                            case 'group-title': cur.group=v; break;
+                            case 'radio': cur.radio=(v==='true'||v==='1'); break;
+                        }
+                    }
+                }
+            } else if (!line.startsWith('#') && cur) { cur.url=line; channels.push(cur); cur=null; }
+        }
+        return { channels, epgUrls };
+    }
+
+    function generateM3U() {
+        let header = '#EXTM3U';
+        for (const url of state.epgUrls) header += ` x-tvg-url="${url}"`;
+        let out = header + '\n';
+        for (const ch of state.channels) {
+            let a = '';
+            if (isRadio(ch)) a += ' radio="true"';
+            if (ch.tvg.id) a += ` tvg-id="${ch.tvg.id}"`;
+            if (ch.tvg.name) a += ` tvg-name="${ch.tvg.name}"`;
+            if (ch.tvg.logo) a += ` tvg-logo="${ch.tvg.logo}"`;
+            if (ch.tvg.language) a += ` tvg-language="${ch.tvg.language}"`;
+            if (ch.tvg.country) a += ` tvg-country="${ch.tvg.country}"`;
+            if (ch.tvg.genre) a += ` tvg-genre="${ch.tvg.genre}"`;
+            if (ch.tvg.url) a += ` tvg-url="${ch.tvg.url}"`;
+            if (ch.tvg.shift!==''&&ch.tvg.shift!==undefined) a += ` tvg-shift="${ch.tvg.shift}"`;
+            if (ch.tvg.chno!==''&&ch.tvg.chno!==undefined) a += ` tvg-chno="${ch.tvg.chno}"`;
+            if (ch.tvg.rec) a += ` tvg-rec="${ch.tvg.rec}"`;
+            if (ch.tvg.guide) a += ` tvg-guide="${ch.tvg.guide}"`;
+            if (ch.tvg.source) a += ` tvg-source="${ch.tvg.source}"`;
+            if (ch.group) a += ` group-title="${ch.group}"`;
+            out += `#EXTINF:-1${a},${ch.name}\n${ch.url}\n`;
+        }
+        return out;
+    }
+
+    /* ========================================================
+       GRUPPEN HILFSFUNKTIONEN
+    ======================================================== */
+    function getGroupMap() { const m=new Map(); for(const c of state.channels){const g=c.group||'';m.set(g,(m.get(g)||0)+1);} return m; }
+    
+    function getSortedGroups() { 
+        const m=getGroupMap(),o=[],s=new Set(); 
+        for(const g of state.groupOrder){
+            if(g && !s.has(g)){o.push(g);s.add(g);}
+        } 
+        return[...o,...[...m.keys()].filter(g=>g && !s.has(g)).sort((a,b)=>a.localeCompare(b))]; 
+    }
+    
+    function getAllGroupNames() { 
+        const names = new Set(state.channels.map(c=>c.group).filter(Boolean));
+        state.groupOrder.forEach(g => { if(g) names.add(g); });
+        return [...names].sort((a,b)=>a.localeCompare(b)); 
+    }
+
+    function getFilteredChannels() {
+        let list = [...state.channels];
+        if (state.selectedGroup==='__tv__') list=list.filter(c=>!isRadio(c));
+        else if (state.selectedGroup==='__radio__') list=list.filter(c=>isRadio(c));
+        else if (state.selectedGroup==='__ungrouped__') list=list.filter(c=>!c.group);
+        else if (state.selectedGroup!=='__all__') list=list.filter(c=>c.group===state.selectedGroup);
+        if (state.searchQuery) { const q=state.searchQuery.toLowerCase(); list=list.filter(c=>c.name.toLowerCase().includes(q)||c.group.toLowerCase().includes(q)||c.tvg.id.toLowerCase().includes(q)||c.url.toLowerCase().includes(q)); }
+        switch(state.sortOrder){ case'name-asc':list.sort((a,b)=>a.name.localeCompare(b.name));break; case'name-desc':list.sort((a,b)=>b.name.localeCompare(a.name));break; case'chno-asc':list.sort((a,b)=>(parseFloat(a.tvg.chno)||0)-(parseFloat(b.tvg.chno)||0));break; case'chno-desc':list.sort((a,b)=>(parseFloat(b.tvg.chno)||0)-(parseFloat(a.tvg.chno)||0));break; }
+        return list;
+    }
+
+    /* ========================================================
+       RENDERING
+    ======================================================== */
+    function render() { renderGroups(); renderChannels(); renderToolbar(); renderFooter(); updateBatchBar(); updateEpgIndicator(); saveToLocalStorage(); }
+
+    function renderGroups() {
+        const map=getGroupMap(), sorted=getSortedGroups(), all=state.channels.length;
+        const tvCount=state.channels.filter(c=>!isRadio(c)).length, radioCount=state.channels.filter(c=>isRadio(c)).length;
+        const ungrouped=state.channels.filter(c=>!c.group).length;
+        document.getElementById('countAll').textContent=all;
+        document.getElementById('countTv').textContent=tvCount;
+        document.getElementById('countRadio').textContent=radioCount;
+        document.getElementById('countUngrouped').textContent=ungrouped;
+        document.querySelectorAll('#sidebar .group-item').forEach(el=>el.classList.toggle('active',el.dataset.group===state.selectedGroup));
+        const container=document.getElementById('groupList'); container.innerHTML='';
+        for (const g of sorted) {
+            const count=map.get(g)||0; const div=document.createElement('div');
+            div.className='group-item'+(state.selectedGroup===g?' active':''); div.dataset.group=g; div.draggable=true;
+            div.onclick=(e)=>{if(!e.target.closest('.group-actions'))selectGroup(g);};
+            
+            div.addEventListener('dragstart',e=>{
+                e.dataTransfer.setData('application/x-m3u-group', g);
+                e.dataTransfer.effectAllowed='move';
+                div.classList.add('dragging');
+            });
+            div.addEventListener('dragend',()=>div.classList.remove('dragging'));
+            
+            div.addEventListener('dragover',e=>{
+                e.preventDefault();
+                e.dataTransfer.dropEffect='move';
+                const types = Array.from(e.dataTransfer.types);
+                if(types.includes('application/x-m3u-channel')) {
+                    div.classList.remove('drag-over-top','drag-over-bottom');
+                    div.classList.add('drag-over-group');
+                } else if(types.includes('application/x-m3u-group')) {
+                    div.classList.remove('drag-over-group');
+                    const r=div.getBoundingClientRect();
+                    if(e.clientY<r.top+r.height/2) div.classList.add('drag-over-top');
+                    else div.classList.add('drag-over-bottom');
+                }
+            });
+            div.addEventListener('dragleave',()=>div.classList.remove('drag-over-top','drag-over-bottom','drag-over-group'));
+            
+            div.addEventListener('drop', e => sidebarGroupDrop(e, g));
+
+            div.innerHTML=`<i class="fa-solid fa-grip-vertical text-xs text-gray-600 cursor-grab"></i><span class="flex-1 text-sm font-medium truncate">${escHtml(g)}</span><span class="text-xs text-gray-500 font-mono">${count}</span><div class="group-actions"><button class="btn btn-icon btn-ghost" style="width:24px;height:24px;padding:0;" title="Umbenennen" onclick="event.stopPropagation();renameGroup('${escAttr(g)}')"><i class="fa-solid fa-pen text-[10px]"></i></button><button class="btn btn-icon btn-danger" style="width:24px;height:24px;padding:0;" title="Löschen" onclick="event.stopPropagation();deleteGroup('${escAttr(g)}')"><i class="fa-solid fa-trash text-[10px]"></i></button></div>`;
+            container.appendChild(div);
+        }
+    }
+
+    function renderChannels() {
+        const container=document.getElementById('channelContainer'), list=getFilteredChannels();
+        if (list.length===0) {
+            container.innerHTML=`<div class="empty-state"><i class="fa-solid ${state.channels.length===0?'fa-satellite-dish':'fa-filter-circle-xmark'} text-4xl text-gray-700 mb-4"></i><p class="text-gray-500 text-lg font-medium">${state.channels.length===0?'Keine Sender vorhanden':'Keine Ergebnisse'}</p><p class="text-gray-600 text-sm mt-1">${state.channels.length===0?'Importiere eine M3U-Datei oder erstelle einen neuen Sender.':'Versuche einen anderen Suchbegriff oder Filter.'}</p></div>`;
+            return;
+        }
+        if (state.viewMode==='table') renderTable(container,list); else renderCards(container,list);
+    }
+
+    function renderTable(container, list) {
+        let html=`<div class="table-header"><div class="custom-check ${state.selectedIds.size===list.length&&list.length>0?'checked':''}" onclick="toggleSelectAll()"></div><div>Logo</div><div>Name / URL</div><div>Gruppe</div><div>Nr.</div><div></div><div class="text-right">Aktionen</div></div>`;
+        for (const ch of list) {
+            const sel=state.selectedIds.has(ch.id), radio=isRadio(ch);
+            const logo=ch.tvg.logo?`<img src="${escAttr(ch.tvg.logo)}" alt="" class="w-10 h-10 rounded-md object-contain bg-elevated" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="logo-placeholder" style="display:none"><i class='fa-solid ${radio?'fa-radio':'fa-tv'}'></i></div>`:`<div class="logo-placeholder"><i class="fa-solid ${radio?'fa-radio radio-icon':'fa-tv'}"></i></div>`;
+            const chno=ch.tvg.chno?`<span class="font-mono text-xs bg-elevated px-2 py-0.5 rounded">${escHtml(ch.tvg.chno)}</span>`:'<span class="text-gray-700 text-xs">-</span>';
+            html+=`<div class="channel-row ${sel?'selected':''}" data-id="${ch.id}" draggable="true" ondragstart="channelDragStart(event,'${ch.id}')" ondragend="channelDragEnd(event)" ondragover="channelDragOver(event)" ondragleave="channelDragLeave(event)" ondrop="channelDrop(event,'${ch.id}')"><div class="custom-check ${sel?'checked':''}" onclick="event.stopPropagation();toggleSelect('${ch.id}')"></div><div>${logo}</div><div class="min-w-0"><div class="text-sm font-medium truncate">${escHtml(ch.name||'Unbenannt')}</div><div class="text-xs text-gray-600 font-mono truncate">${escHtml(ch.url||'Keine URL')}</div></div><div>${ch.group?`<span class="badge bg-accent-dim text-accent">${escHtml(ch.group)}</span>`:'<span class="text-gray-700 text-xs">-</span>'}</div><div>${chno}</div><div>${radio?'<i class="fa-solid fa-radio radio-icon" title="Radio-Sender"></i>':''}</div><div class="flex items-center justify-end gap-1"><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Oben" onclick="event.stopPropagation();moveChannel('${ch.id}',-1)"><i class="fa-solid fa-chevron-up text-[10px]"></i></button><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Unten" onclick="event.stopPropagation();moveChannel('${ch.id}',1)"><i class="fa-solid fa-chevron-down text-[10px]"></i></button><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Kopieren" onclick="event.stopPropagation();duplicateChannel('${ch.id}')"><i class="fa-solid fa-copy text-[10px]"></i></button><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Bearbeiten" onclick="event.stopPropagation();editChannel('${ch.id}')"><i class="fa-solid fa-pen text-[10px]"></i></button><button class="btn btn-icon btn-danger" style="width:26px;height:26px;padding:0;" title="Löschen" onclick="event.stopPropagation();deleteChannel('${ch.id}')"><i class="fa-solid fa-trash text-[10px]"></i></button></div></div>`;
+        }
+        container.innerHTML=html;
+    }
+
+    function renderCards(container, list) {
+        let html='<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4">';
+        for (const ch of list) {
+            const sel=state.selectedIds.has(ch.id), radio=isRadio(ch);
+            const logo=ch.tvg.logo?`<img src="${escAttr(ch.tvg.logo)}" alt="" class="w-14 h-14 rounded-lg object-contain bg-elevated" onerror="this.outerHTML='<div class=\\'logo-placeholder w-14 h-14\\'><i class=\\'fa-solid ${radio?'fa-radio radio-icon':'fa-tv'}\\'></i></div>'">`:`<div class="logo-placeholder w-14 h-14"><i class="fa-solid ${radio?'fa-radio radio-icon':'fa-tv'} text-lg"></i></div>`;
+            html+=`<div class="channel-card ${sel?'selected':''}" data-id="${ch.id}" draggable="true" ondragstart="channelDragStart(event,'${ch.id}')" ondragend="channelDragEnd(event)" ondragover="channelDragOver(event)" ondragleave="channelDragLeave(event)" ondrop="channelDrop(event,'${ch.id}')" onclick="toggleSelect('${ch.id}')"><div class="flex items-start gap-3 mb-3"><div class="custom-check ${sel?'checked':''}" onclick="event.stopPropagation();toggleSelect('${ch.id}')" style="margin-top:2px;"></div>${logo}<div class="flex-1 min-w-0"><div class="flex items-center gap-2"><span class="text-sm font-semibold truncate">${escHtml(ch.name||'Unbenannt')}</span>${radio?'<i class="fa-solid fa-radio radio-icon flex-shrink-0" title="Radio"></i>':''}</div>${ch.group?`<span class="badge bg-accent-dim text-accent mt-1">${escHtml(ch.group)}</span>`:''}</div></div><div class="text-[11px] text-gray-600 font-mono truncate mb-3">${escHtml(ch.url||'Keine URL')}</div><div class="flex items-center justify-between"><div class="flex gap-1">${ch.tvg.chno?`<span class="text-[11px] font-mono bg-elevated px-2 py-0.5 rounded text-gray-400">Nr. ${escHtml(ch.tvg.chno)}</span>`:''}${ch.tvg.language?`<span class="text-[11px] font-mono bg-elevated px-2 py-0.5 rounded text-gray-400">${escHtml(ch.tvg.language)}</span>`:''}</div><div class="flex gap-1"><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Bearbeiten" onclick="event.stopPropagation();editChannel('${ch.id}')"><i class="fa-solid fa-pen text-[10px]"></i></button><button class="btn btn-icon btn-danger" style="width:26px;height:26px;padding:0;" title="Löschen" onclick="event.stopPropagation();deleteChannel('${ch.id}')"><i class="fa-solid fa-trash text-[10px]"></i></button></div></div></div>`;
+        }
+        html+='</div>'; container.innerHTML=html;
+    }
+
+    function renderToolbar() {
+        const list=getFilteredChannels();
+        const labels={'__all__':'Alle Sender','__tv__':'TV-Sender','__radio__':'Radio-Sender','__ungrouped__':'Ohne Gruppe'};
+        let info=labels[state.selectedGroup]||`Gruppe: ${state.selectedGroup}`;
+        info+=` — ${list.length} Sender`;
+        if(state.searchQuery) info+=` (Suche: "${state.searchQuery}")`;
+        document.getElementById('toolbarInfo').textContent=info;
+        const sel=document.getElementById('batchGroup'),cv=sel.value;
+        sel.innerHTML='<option value="">Gruppe zuweisen...</option>';
+        for(const g of getAllGroupNames()) sel.innerHTML+=`<option value="${escAttr(g)}">${escHtml(g)}</option>`;
+        sel.innerHTML+='<option value="__new__">+ Neue Gruppe...</option>'; sel.value=cv;
+    }
+
+    function renderFooter() {
+        const t=state.channels.length, gr=getAllGroupNames().length, tv=state.channels.filter(c=>!isRadio(c)).length, ra=state.channels.filter(c=>isRadio(c)).length, wl=state.channels.filter(c=>c.tvg.logo).length;
+        const ep=state.epgUrls.length>0?` | ${state.epgUrls.length} EPG`:''; 
+        document.getElementById('footerStats').textContent=`${t} Sender (${tv} TV / ${ra} Radio) | ${gr} Gruppen | ${wl} mit Logo${ep}`;
+    }
+
+    function updateEpgIndicator() { const d=document.getElementById('epgDot'); if(state.epgUrls.length>0)d.classList.remove('hidden');else d.classList.add('hidden'); }
+    function updateBatchBar() { const b=document.getElementById('batchBar'),c=state.selectedIds.size; if(c>0){b.classList.remove('hidden');b.classList.add('flex');document.getElementById('batchCount').textContent=`${c} ausgewählt`;}else{b.classList.add('hidden');b.classList.remove('flex');} }
+
+    /* ========================================================
+       EPG-QUELLEN
+    ======================================================== */
+    function openEpgModal(){renderEpgUrlList();document.getElementById('epgModal').classList.remove('hidden');document.getElementById('epgModal').classList.add('flex');}
+    function closeEpgModal(){document.getElementById('epgModal').classList.add('hidden');document.getElementById('epgModal').classList.remove('flex');}
+    function renderEpgUrlList(){
+        const c=document.getElementById('epgUrlList');
+        if(!state.epgUrls.length){c.innerHTML=`<div class="text-center py-8 text-gray-600"><i class="fa-solid fa-calendar-xmark text-2xl mb-2 block"></i><p class="text-sm">Keine EPG-Quellen definiert</p></div>`;return;}
+        let h='';state.epgUrls.forEach((u,i)=>{
+            h+=`<div class="epg-url-row"><span class="text-xs text-gray-500 font-mono w-6 text-center flex-shrink-0">${i+1}</span><input type="text" value="${escAttr(u)}" class="input-field input-mono flex-1 py-1.5 text-xs" onchange="updateEpgUrl(${i},this.value)"><button class="btn btn-icon btn-ghost flex-shrink-0" style="width:28px;height:28px;padding:0;" title="Öffnen" onclick="window.open('${escAttr(u)}','_blank','noopener')"><i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i></button><button class="btn btn-icon btn-ghost flex-shrink-0" style="width:28px;height:28px;padding:0;" onclick="moveEpgUrl(${i},-1)" ${i===0?'disabled style="width:28px;height:28px;padding:0;opacity:0.3;pointer-events:none;"':''}><i class="fa-solid fa-chevron-up text-[10px]"></i></button><button class="btn btn-icon btn-ghost flex-shrink-0" style="width:28px;height:28px;padding:0;" onclick="moveEpgUrl(${i},1)" ${i===state.epgUrls.length-1?'disabled style="width:28px;height:28px;padding:0;opacity:0.3;pointer-events:none;"':''}><i class="fa-solid fa-chevron-down text-[10px]"></i></button><button class="btn btn-icon btn-danger flex-shrink-0" style="width:28px;height:28px;padding:0;" onclick="removeEpgUrl(${i})"><i class="fa-solid fa-trash text-[10px]"></i></button></div>`;
+        });c.innerHTML=h;
+    }
+    function addEpgUrl(){const i=document.getElementById('newEpgUrl'),u=i.value.trim();if(!u){toast('URL eingeben.','warning');return;}if(state.epgUrls.includes(u)){toast('Existiert bereits.','warning');return;}state.epgUrls.push(u);i.value='';renderEpgUrlList();render();toast('EPG-Quelle hinzugefügt.','success');}
+    function updateEpgUrl(i,v){v=v.trim();if(!v){removeEpgUrl(i);return;}if(state.epgUrls.some((u,j)=>j!==i&&u===v)){toast('Existiert bereits.','warning');renderEpgUrlList();return;}state.epgUrls[i]=v;render();}
+    function removeEpgUrl(i){state.epgUrls.splice(i,1);renderEpgUrlList();render();toast('EPG-Quelle entfernt.','info');}
+    function moveEpgUrl(i,d){const n=i+d;if(n<0||n>=state.epgUrls.length)return;[state.epgUrls[i],state.epgUrls[n]]=[state.epgUrls[n],state.epgUrls[i]];renderEpgUrlList();render();}
+
+    /* ========================================================
+       GRUPPEN AKTIONEN
+    ======================================================== */
+    function selectGroup(g){state.selectedGroup=g;state.selectedIds.clear();render();}
+    function addGroup(){state.editGroupMode='create';state.editGroupOldName='';document.getElementById('groupModalTitle').textContent='Gruppe erstellen';document.getElementById('groupModalInput').value='';document.getElementById('groupModal').classList.remove('hidden');document.getElementById('groupModal').classList.add('flex');setTimeout(()=>document.getElementById('groupModalInput').focus(),10);}
+    function renameGroup(g){state.editGroupMode='rename';state.editGroupOldName=g;document.getElementById('groupModalTitle').textContent='Gruppe umbenennen';document.getElementById('groupModalInput').value=g;document.getElementById('groupModal').classList.remove('hidden');document.getElementById('groupModal').classList.add('flex');setTimeout(()=>document.getElementById('groupModalInput').focus(),10);}
+    function closeGroupModal(){document.getElementById('groupModal').classList.add('hidden');document.getElementById('groupModal').classList.remove('flex');}
+    function saveGroup(){const v=document.getElementById('groupModalInput').value.trim();if(!v){toast('Bitte Namen eingeben.','warning');return;}if(state.editGroupMode==='create'){if(getAllGroupNames().includes(v)){toast('Existiert bereits.','warning');return;}state.groupOrder.push(v);render();toast('Gruppe erstellt.','success');}else{const o=state.editGroupOldName;if(v===o){closeGroupModal();return;}if(getAllGroupNames().includes(v)){toast('Existiert bereits.','warning');return;}state.channels.forEach(c=>{if(c.group===o)c.group=v;});const idx=state.groupOrder.indexOf(o);if(idx!==-1)state.groupOrder[idx]=v;render();toast('Gruppe umbenannt.','success');}closeGroupModal();}
+
+    function deleteGroup(g){const cnt=state.channels.filter(c=>c.group===g).length;if(cnt===0){state.groupOrder=state.groupOrder.filter(x=>x!==g);render();return;}showConfirm('Gruppe löschen',`Möchtest du die Gruppe "${g}" wirklich löschen?`,`${cnt} Sender werden in "Ohne Gruppe" verschoben.`,()=>{state.channels.forEach(c=>{if(c.group===g)c.group='';});state.groupOrder=state.groupOrder.filter(x=>x!==g);if(state.selectedGroup===g)state.selectedGroup='__all__';render();toast('Gruppe gelöscht.','info');});}
+
+    function reorderGroup(from, to, before){
+        if (!state.groupOrder.includes(from)) state.groupOrder.push(from);
+        if (!state.groupOrder.includes(to)) state.groupOrder.push(to);
+
+        const fromIdx = state.groupOrder.indexOf(from);
+        state.groupOrder.splice(fromIdx, 1);
+
+        const toIdx = state.groupOrder.indexOf(to);
+        if (toIdx === -1) return;
+
+        state.groupOrder.splice(before ? toIdx : toIdx + 1, 0, from);
+        render();
+    }
+
+    /* ========================================================
+       DRAG & DROP IN SIDEBAR
+    ======================================================== */
+    function sidebarGroupDragOver(e) {
+        e.preventDefault();
+        const types = Array.from(e.dataTransfer.types);
+        if (types.includes('application/x-m3u-channel')) {
+            e.dataTransfer.dropEffect = 'move';
+            e.currentTarget.classList.add('drag-over-group');
+        } else {
+            e.dataTransfer.dropEffect = 'none'; 
+            e.currentTarget.classList.remove('drag-over-group');
+        }
+    }
+    function sidebarGroupDragLeave(e) { e.currentTarget.classList.remove('drag-over-group'); }
+    function sidebarGroupDrop(e, targetGroup) {
+        e.preventDefault();
+        e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom', 'drag-over-group');
+        
+        const chId = e.dataTransfer.getData('application/x-m3u-channel');
+        const grpFrom = e.dataTransfer.getData('application/x-m3u-group');
+        
+        if (grpFrom) {
+            if (grpFrom === targetGroup) return;
+            const before = e.clientY < e.currentTarget.getBoundingClientRect().top + e.currentTarget.getBoundingClientRect().height / 2;
+            reorderGroup(grpFrom, targetGroup, before);
+        } else if (chId) {
+            const ch = state.channels.find(c => c.id === chId);
+            if (!ch) return;
+            const newGroupName = targetGroup === '__ungrouped__' ? '' : targetGroup;
+            if (ch.group === newGroupName) { toast('Sender ist bereits in dieser Gruppe.', 'info'); return; }
+            ch.group = newGroupName;
+            render();
+            toast(`Sender "${ch.name}" verschoben.`, 'success');
+        }
+    }
+
+    /* ========================================================
+       SENDER AKTIONEN
+    ======================================================== */
+    function addChannel(){const id=genId();state.channels.push({id,name:'Neuer Sender',url:'',radio:false,tvg:{id:'',name:'',logo:'',language:'',country:'',url:'',shift:'',chno:'',rec:'',guide:'',source:'',genre:''},group:state.selectedGroup!=='__all__'&&state.selectedGroup!=='__tv__'&&state.selectedGroup!=='__radio__'&&state.selectedGroup!=='__ungrouped__'?state.selectedGroup:''});editChannel(id);}
+    function editChannel(id){state.editChannelId=id;const ch=state.channels.find(c=>c.id===id);if(!ch)return;state.editRadio=isRadio(ch);document.getElementById('editModalTitle').textContent='Sender bearbeiten';document.getElementById('editName').value=ch.name;document.getElementById('editUrl').value=ch.url;document.getElementById('editLogo').value=ch.tvg.logo||'';document.getElementById('editTvgId').value=ch.tvg.id||'';document.getElementById('editTvgName').value=ch.tvg.name||'';document.getElementById('editTvgLanguage').value=ch.tvg.language||'';document.getElementById('editTvgCountry').value=ch.tvg.country||'';document.getElementById('editTvgGenre').value=ch.tvg.genre||'';document.getElementById('editTvgChno').value=ch.tvg.chno||'';document.getElementById('editTvgShift').value=ch.tvg.shift||'';document.getElementById('editTvgUrl').value=ch.tvg.url||'';document.getElementById('editTvgGuide').value=ch.tvg.guide||'';document.getElementById('editTvgSource').value=ch.tvg.source||'';document.getElementById('editTvgRec').checked=ch.tvg.rec==='true'||ch.tvg.rec==='1';updateRadioToggle();updateLogoPreview();const sel=document.getElementById('editGroup');sel.innerHTML='<option value="">-- keine Gruppe --</option>';for(const g of getAllGroupNames())sel.innerHTML+=`<option value="${escAttr(g)}">${escHtml(g)}</option>`;sel.innerHTML+='<option value="__new__">+ Neue Gruppe...</option>';sel.value=ch.group||'';document.getElementById('editNewGroup').value='';document.getElementById('editNewGroup').classList.add('hidden');document.getElementById('editModal').classList.remove('hidden');document.getElementById('editModal').classList.add('flex');}
+    function closeEditModal(){document.getElementById('editModal').classList.add('hidden');document.getElementById('editModal').classList.remove('flex');}
+    function saveChannel(){const ch=state.channels.find(c=>c.id===state.editChannelId);if(!ch)return;ch.name=document.getElementById('editName').value.trim()||'Unbenannt';ch.url=document.getElementById('editUrl').value.trim();ch.tvg.logo=document.getElementById('editLogo').value.trim();ch.tvg.id=document.getElementById('editTvgId').value.trim();ch.tvg.name=document.getElementById('editTvgName').value.trim();ch.tvg.language=document.getElementById('editTvgLanguage').value.trim();ch.tvg.country=document.getElementById('editTvgCountry').value.trim();ch.tvg.genre=document.getElementById('editTvgGenre').value.trim();ch.tvg.chno=document.getElementById('editTvgChno').value.trim();ch.tvg.shift=document.getElementById('editTvgShift').value.trim();ch.tvg.url=document.getElementById('editTvgUrl').value.trim();ch.tvg.guide=document.getElementById('editTvgGuide').value.trim();ch.tvg.source=document.getElementById('editTvgSource').value.trim();ch.tvg.rec=document.getElementById('editTvgRec').checked?'true':'';ch.radio=state.editRadio;const gSel=document.getElementById('editGroup'),gNew=document.getElementById('editNewGroup');if(gSel.value==='__new__'){ch.group=gNew.value.trim();if(ch.group&&!getAllGroupNames().includes(ch.group))state.groupOrder.push(ch.group);}else{ch.group=gSel.value;}closeEditModal();render();toast('Sender gespeichert.','success');}
+
+    function toggleRadioEdit(){state.editRadio=!state.editRadio;updateRadioToggle();}
+    function updateRadioToggle(){const t=document.getElementById('radioToggle'),l=document.getElementById('radioToggleLabel');if(state.editRadio){t.classList.add('on');l.textContent='Radio-Sender';}else{t.classList.remove('on');l.textContent='TV-Sender';}}
+    function updateLogoPreview(){const url=document.getElementById('editLogo').value.trim(),img=document.getElementById('editLogoPreview');if(url){img.src=url;img.classList.remove('hidden');}else{img.classList.add('hidden');img.src='';}}
+    function toggleNewGroupInput(){const sel=document.getElementById('editGroup'),inp=document.getElementById('editNewGroup');if(sel.value==='__new__'){inp.classList.remove('hidden');inp.focus();}else{inp.classList.add('hidden');}}
+
+    function deleteChannel(id){const ch=state.channels.find(c=>c.id===id);if(!ch)return;showConfirm('Sender löschen',`Möchtest du "${ch.name}" wirklich löschen?`,null,()=>{state.channels=state.channels.filter(c=>c.id!==id);state.selectedIds.delete(id);render();toast('Sender gelöscht.','info');});}
+    function duplicateChannel(id){const ch=state.channels.find(c=>c.id===id);if(!ch)return;const copy={...ch,id:genId(),name:ch.name+' (Kopie)',tvg:{...ch.tvg}};const idx=state.channels.indexOf(ch);state.channels.splice(idx+1,0,copy);render();toast('Sender dupliziert.','success');}
+    function moveChannel(id,dir){const idx=state.channels.findIndex(c=>c.id===id);if(idx===-1)return;const nIdx=idx+dir;if(nIdx<0||nIdx>=state.channels.length)return;[state.channels[idx],state.channels[nIdx]]=[state.channels[nIdx],state.channels[idx]];render();}
+
+    /* ========================================================
+       AUSWAHL & BATCH
+    ======================================================== */
+    function toggleSelect(id){if(state.selectedIds.has(id))state.selectedIds.delete(id);else state.selectedIds.add(id);render();}
+    function toggleSelectAll(){const list=getFilteredChannels();if(state.selectedIds.size===list.length&&list.length>0)state.selectedIds.clear();else list.forEach(c=>state.selectedIds.add(c.id));render();}
+    function batchSetGroup(){const g=document.getElementById('batchGroup').value;if(!g)return;if(g==='__new__'){const ng=prompt('Neue Gruppenname:');if(!ng)return;state.selectedIds.forEach(id=>{const ch=state.channels.find(c=>c.id===id);if(ch)ch.group=ng;});if(!getAllGroupNames().includes(ng))state.groupOrder.push(ng);}else{state.selectedIds.forEach(id=>{const ch=state.channels.find(c=>c.id===id);if(ch)ch.group=g;});}state.selectedIds.clear();render();toast('Gruppe zugewiesen.','success');}
+    function batchToggleRadio(){state.selectedIds.forEach(id=>{const ch=state.channels.find(c=>c.id===id);if(ch)ch.radio=!isRadio(ch);});render();toast('Radio-Flag umgeschaltet.','success');}
+    function batchDelete(){const cnt=state.selectedIds.size;if(cnt===0)return;showConfirm('Ausgewählte löschen',`Möchtest du ${cnt} Sender wirklich löschen?`,null,()=>{state.channels=state.channels.filter(c=>!state.selectedIds.has(c.id));state.selectedIds.clear();render();toast('Sender gelöscht.','info');});}
+
+    /* ========================================================
+       DRAG & DROP (Sender untereinander sortieren)
+    ======================================================== */
+    function channelDragStart(e,id){
+        e.dataTransfer.setData('application/x-m3u-channel', id);
+        e.dataTransfer.effectAllowed='move';
+        e.target.classList.add('dragging');
+        state.dragSrcId=id;
+    }
+    function channelDragEnd(e){e.target.classList.remove('dragging');state.dragSrcId=null;document.querySelectorAll('.channel-row,.channel-card').forEach(el=>el.classList.remove('drag-over-top','drag-over-bottom'));}
+    function channelDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move';const r=e.currentTarget.getBoundingClientRect();e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');if(e.clientY<r.top+r.height/2)e.currentTarget.classList.add('drag-over-top');else e.currentTarget.classList.add('drag-over-bottom');}
+    function channelDragLeave(e){e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');}
+    function channelDrop(e,targetId){
+        e.preventDefault();
+        e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');
+        const srcId = e.dataTransfer.getData('application/x-m3u-channel');
+        if(!srcId) return; 
+        
+        if(srcId===targetId)return;
+        const srcIdx=state.channels.findIndex(c=>c.id===srcId),targetIdx=state.channels.findIndex(c=>c.id===targetId);
+        if(srcIdx===-1||targetIdx===-1)return;
+        
+        const[src]=state.channels.splice(srcIdx,1);
+        const newTargetIdx=state.channels.findIndex(c=>c.id===targetId);
+        const before=e.clientY<e.currentTarget.getBoundingClientRect().top+e.currentTarget.getBoundingClientRect().height/2;
+        state.channels.splice(before?newTargetIdx:newTargetIdx+1,0,src);
+        render();
+    }
+
+    /* ========================================================
+       DATEI IMPORT / EXPORT
+    ======================================================== */
+    function importFile(){document.getElementById('fileInput').click();}
+    function handleFileSelect(e){const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=(ev)=>{const text=ev.target.result;const{channels,epgUrls}=parseM3U(text);state.channels=channels;state.epgUrls=epgUrls;state.selectedIds.clear();render();toast(`Importiert: ${channels.length} Sender`,'success');};reader.readAsText(file,"UTF-8");e.target.value='';}
+    
+    function exportFile(){
+        // Füge UTF-8 BOM hinzu (Byte Order Mark) für maximale Kompatibilität
+        const text = '\uFEFF' + generateM3U();
+        // Exportiere als M3U8 mit explizitem UTF-8 Charset
+        const blob = new Blob([text], {type: 'audio/x-mpegurl;charset=UTF-8'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'playlist.m3u8';
+        a.click();
+        URL.revokeObjectURL(url);
+        toast('Erfolgreich als M3U8 (UTF-8) exportiert!','success');
+    }
+
+    /* ========================================================
+       HILFSFUNKTIONEN
+    ======================================================== */
+    function escHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+    function escAttr(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+    function setView(mode){state.viewMode=mode;document.getElementById('viewTable').className=`px-3 py-1 text-xs ${mode==='table'?'bg-accent text-bg':'text-gray-500 hover:text-gray-300'}`;document.getElementById('viewCards').className=`px-3 py-1 text-xs ${mode==='cards'?'bg-accent text-bg':'text-gray-500 hover:text-gray-300'}`;render();}
+    function applySort(){state.sortOrder=document.getElementById('sortSelect').value;render();}
+
+    /* ========================================================
+       TOAST BENACHRICHTIGUNGEN
+    ======================================================== */
+    function toast(msg,type='info'){const container=document.getElementById('toastContainer');const el=document.createElement('div');const colors={success:'border-green-500/50 bg-green-500/10',warning:'border-yellow-500/50 bg-yellow-500/10',info:'border-cyan-500/50 bg-cyan-500/10',error:'border-red-500/50 bg-red-500/10'};const icons={success:'fa-circle-check text-green-400',warning:'fa-triangle-exclamation text-yellow-400',info:'fa-circle-info text-cyan-400',error:'fa-circle-xmark text-red-400'};el.className=`toast-enter flex items-center gap-3 px-4 py-3 rounded-xl border ${colors[type]||colors.info} backdrop-blur-md shadow-lg`;el.innerHTML=`<i class="fa-solid ${icons[type]||icons.info}"></i><span class="text-sm text-gray-200">${msg}</span>`;container.appendChild(el);setTimeout(()=>{el.classList.remove('toast-enter');el.classList.add('toast-exit');setTimeout(()=>el.remove(),300);},3000);}
+
+    /* ========================================================
+       LOCAL STORAGE
+    ======================================================== */
+    function saveToLocalStorage(){try{localStorage.setItem('m3u_editor_state',JSON.stringify({channels:state.channels,epgUrls:state.epgUrls,groupOrder:state.groupOrder}));}catch(e){}}
+    function loadFromLocalStorage(){try{const d=JSON.parse(localStorage.getItem('m3u_editor_state'));if(d){state.channels=d.channels||[];state.epgUrls=d.epgUrls||[];state.groupOrder=d.groupOrder||[];}}catch(e){}}
+
+    /* ========================================================
+       KEYBOARD SHORTCUTS
+    ======================================================== */
+    document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;if(e.ctrlKey&&e.key==='n'){e.preventDefault();addChannel();}if(e.ctrlKey&&e.key==='o'){e.preventDefault();importFile();}if(e.ctrlKey&&e.key==='s'){e.preventDefault();exportFile();}if(e.key==='Delete'&&state.selectedIds.size>0){e.preventDefault();batchDelete();}if(e.key==='Escape'){closeConfirm();closeEditModal();closeGroupModal();closeEpgModal();}});
+
+    /* ========================================================
+       DRAG & DROP FILE (Global)
+    ======================================================== */
+    document.addEventListener('dragover',e=>{e.preventDefault();if(e.dataTransfer.types.includes('Files'))document.getElementById('dropOverlay').classList.add('active');});
+    document.addEventListener('dragleave',e=>{if(e.relatedTarget===null||!document.body.contains(e.relatedTarget))document.getElementById('dropOverlay').classList.remove('active');});
+    document.addEventListener('drop',e=>{e.preventDefault();document.getElementById('dropOverlay').classList.remove('active');if(e.dataTransfer.files.length>0){const file=e.dataTransfer.files[0];if(file.name.endsWith('.m3u')||file.name.endsWith('.m3u8')||file.name.endsWith('.txt')){const reader=new FileReader();reader.onload=(ev)=>{const{channels,epgUrls}=parseM3U(ev.target.result);state.channels=channels;state.epgUrls=epgUrls;state.selectedIds.clear();render();toast(`Importiert: ${channels.length} Sender`,'success');};reader.readAsText(file,"UTF-8");}}});
+
+    /* ========================================================
+       SEARCH
+    ======================================================== */
+    document.getElementById('searchInput').addEventListener('input',e=>{state.searchQuery=e.target.value;render();});
+
+    /* ========================================================
+       INIT
+    ======================================================== */
+    loadFromLocalStorage();
+    render();
+    </script>
+</body>
+</html>
