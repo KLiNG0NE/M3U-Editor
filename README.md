@@ -18,7 +18,7 @@ https://kling0ne.github.io/M3U-Editor/
 
 ---
 
-### Offline ##
+## Offline ##
 
 Alternativ kann die Datei ``index.html`` heruntergeladen und in einem Browser geöffnet werden.
 
