@@ -1,4 +1,5 @@
 # M3U-Editor
+
 Ein Editor für M3U-Playlisten
 
 ---
@@ -7,6 +8,8 @@ Ein Editor um M3U-Playlisten zu erstellen und zu Sortieren. Dieser Editor ist f�
 
 ---
 
+## Online ##
+
 Der Editor kann online als Single-Page-Webanwendung (SPA) unter folgender URL genutzt werden:
 
 ```
@@ -14,6 +17,8 @@ https://kling0ne.github.io/M3U-Editor/
 ```
 
 ---
+
+### Offline ##
 
 Alternativ kann die Datei ``index.html`` heruntergeladen und in einem Browser geöffnet werden.
 
