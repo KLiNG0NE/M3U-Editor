@@ -234,6 +234,7 @@
                 </div>
                 <button onclick="addChannel()" class="btn btn-ghost btn-sm" title="Neuer Sender (Strg+N)"><i class="fa-solid fa-plus"></i><span class="hidden md:inline">Neu</span></button>
                 <button onclick="importFile()" class="btn btn-ghost btn-sm" title="Importieren (Strg+O)"><i class="fa-solid fa-file-import"></i><span class="hidden md:inline">Import</span></button>
+                <button onclick="openUrlModal()" class="btn btn-ghost btn-sm" title="Playlist per URL laden"><i class="fa-solid fa-link"></i><span class="hidden md:inline">URL</span></button>
                 <button onclick="exportFile()" class="btn btn-primary btn-sm" title="Exportieren (Strg+S)"><i class="fa-solid fa-file-export"></i><span class="hidden md:inline">Export</span></button>
             </div>
         </header>
@@ -317,6 +318,51 @@
             <div class="flex items-center justify-center gap-3 px-6 pb-6">
                 <button id="confirmCancel" class="btn btn-ghost px-8" onclick="closeConfirm()">Abbrechen</button>
                 <button id="confirmOk" class="btn btn-danger-solid px-8"><i class="fa-solid fa-trash"></i> Löschen</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- URL-Import Modal -->
+    <div id="urlModal" class="fixed inset-0 z-40 hidden items-center justify-center p-4" style="background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);">
+        <div class="modal-enter bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-border">
+                <div>
+                    <h2 class="text-lg font-bold">M3U per URL importieren</h2>
+                    <p class="text-xs text-gray-500 mt-0.5">Playlist direkt von einem Server laden</p>
+                </div>
+                <button onclick="closeUrlModal()" class="btn btn-icon btn-ghost" aria-label="Schließen"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="px-6 py-4">
+                <label class="field-label">M3U-URL</label>
+                <input type="text" id="urlImportInput" class="input-field input-mono" placeholder="https://anbieter.de/playlist.m3u" onkeydown="if(event.key==='Enter')importFromUrl()">
+
+                <label class="field-label mt-4">Import-Modus</label>
+                <div class="flex flex-col gap-2">
+                    <label class="flex items-center gap-3 p-3 rounded-lg bg-elevated/50 border border-border cursor-pointer">
+                        <input type="radio" name="urlImportMode" value="merge" checked class="accent-accent">
+                        <div><span class="text-sm font-medium">Zusammenführen</span>
+                        <p class="text-[11px] text-gray-500">Sender werden hinzugefügt; Duplikate (gleiche Stream-URL) übersprungen</p></div>
+                    </label>
+                    <label class="flex items-center gap-3 p-3 rounded-lg bg-elevated/50 border border-border cursor-pointer">
+                        <input type="radio" name="urlImportMode" value="replace" class="accent-accent">
+                        <div><span class="text-sm font-medium">Ersetzen</span>
+                        <p class="text-[11px] text-gray-500">Vorhandene Sender werden komplett ersetzt (mit Bestätigung)</p></div>
+                    </label>
+                </div>
+
+                <div class="mt-4 toggle-wrap" onclick="toggleUrlProxy()">
+                    <div id="urlProxyToggle" class="toggle-track"><div class="toggle-thumb"></div></div>
+                    <div>
+                        <span class="text-sm font-medium">CORS-Proxy verwenden</span>
+                        <p class="text-[11px] text-gray-500">Nur nötig, wenn der Anbieter keine Browser-Zugriffe erlaubt. Die URL wird dann über einen Drittanbieter geleitet.</p>
+                    </div>
+                </div>
+
+                <div id="urlImportStatus" class="hidden"></div>
+            </div>
+            <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
+                <button onclick="closeUrlModal()" class="btn btn-ghost">Abbrechen</button>
+                <button id="urlImportBtn" onclick="importFromUrl()" class="btn btn-primary"><i class="fa-solid fa-cloud-arrow-down"></i> Importieren</button>
             </div>
         </div>
     </div>
@@ -707,7 +753,7 @@ function parseM3U(text) {
     function removeEpgUrl(i){
         const url = state.epgUrls[i];
         if (url === undefined) return;
-    
+
         showConfirm(
             'EPG-Quelle entfernen',
             'Soll diese EPG-Quelle wirklich entfernt werden? Sie wird anschließend nicht mehr als x-tvg-url in die M3U-Datei exportiert.',
@@ -721,6 +767,167 @@ function parseM3U(text) {
         );
     }
     function moveEpgUrl(i,d){const n=i+d;if(n<0||n>=state.epgUrls.length)return;[state.epgUrls[i],state.epgUrls[n]]=[state.epgUrls[n],state.epgUrls[i]];renderEpgUrlList();render();}
+
+
+/* ========================================================
+   URL-IMPORT
+======================================================== */
+const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+const URL_IMPORT_TIMEOUT = 30000;
+
+let urlImportBusy = false;
+let urlImportAbort = null;
+let lastUrlImport = null;
+
+function openUrlModal() {
+    document.getElementById('urlModal').classList.remove('hidden');
+    document.getElementById('urlModal').classList.add('flex');
+    setTimeout(() => document.getElementById('urlImportInput').focus(), 100);
+}
+
+function closeUrlModal() {
+    if (urlImportBusy && urlImportAbort) urlImportAbort.abort(); // laufenden Import abbrechen
+    document.getElementById('urlModal').classList.add('hidden');
+    document.getElementById('urlModal').classList.remove('flex');
+}
+
+function toggleUrlProxy() {
+    document.getElementById('urlProxyToggle').classList.toggle('on');
+}
+
+function setUrlImportLoading(loading) {
+    urlImportBusy = loading;
+    const btn = document.getElementById('urlImportBtn');
+    btn.disabled = loading;
+    btn.style.cursor = loading ? 'wait' : '';
+    btn.innerHTML = loading
+        ? '<i class="fa-solid fa-spinner fa-spin"></i> Wird geladen…'
+        : '<i class="fa-solid fa-cloud-arrow-down"></i> Importieren';
+}
+
+function showUrlStatus(html, type) {
+    const el = document.getElementById('urlImportStatus');
+    el.className = 'mt-4 p-3 rounded-lg border text-sm ' + (type === 'error'
+        ? 'bg-danger-dim border-danger/40 text-danger'
+        : 'bg-accent-dim border-accent/40 text-accent');
+    el.innerHTML = html;
+}
+
+function resetUrlStatus() {
+    const el = document.getElementById('urlImportStatus');
+    el.className = 'hidden';
+    el.innerHTML = '';
+}
+
+function importFromUrl() {
+    if (urlImportBusy) return;
+    const input = document.getElementById('urlImportInput');
+    const raw = input.value.trim();
+
+    if (!raw) { showUrlStatus('Bitte eine URL eingeben.', 'error'); input.focus(); return; }
+
+    let url;
+    try { url = new URL(raw); }
+    catch (e) { showUrlStatus('Ungültige URL – sie muss mit <code>http://</code> oder <code>https://</code> beginnen.', 'error'); return; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        showUrlStatus('Nur <code>http://</code> und <code>https://</code> werden unterstützt.', 'error');
+        return;
+    }
+
+    const mode = document.querySelector('input[name="urlImportMode"]:checked')?.value || 'merge';
+    const useProxy = document.getElementById('urlProxyToggle').classList.contains('on');
+
+    // „Ersetzen" ist destruktiv → Bestätigung einholen
+    if (mode === 'replace' && state.channels.length > 0) {
+        showConfirm(
+            'Sender ersetzen',
+            `Beim Import werden alle ${state.channels.length} vorhandenen Sender entfernt und durch den Inhalt der URL ersetzt.`,
+            `<div class="text-xs font-mono text-gray-400 break-all">${escHtml(raw)}</div>`,
+            () => doUrlImport(raw, mode, useProxy),
+            'Ersetzen'
+        );
+        return;
+    }
+    doUrlImport(raw, mode, useProxy);
+}
+
+/* Import von URL */
+async function doUrlImport(url, mode, useProxy) {
+    lastUrlImport = { url, mode };
+    setUrlImportLoading(true);
+    resetUrlStatus();
+
+    const controller = new AbortController();
+    urlImportAbort = controller;
+    const timer = setTimeout(() => controller.abort(), URL_IMPORT_TIMEOUT);
+
+    try {
+        const target = useProxy ? CORS_PROXY + encodeURIComponent(url) : url;
+        const res = await fetch(target, { signal: controller.signal });
+
+        if (!res.ok) throw new Error(`Server antwortet mit HTTP ${res.status}.`);
+
+        const text = await res.text();
+        if (!text.includes('#EXTINF')) {
+            throw new Error('Die Antwort enthält keine <code>#EXTINF</code>-Zeilen – wahrscheinlich keine M3U-Playlist.');
+        }
+
+        const { channels, epgUrls } = parseM3U(text);
+        if (channels.length === 0) throw new Error('Die Playlist enthält keine Sender.');
+
+        // EPG-Quellen aus der Playlist übernehmen (ohne Dubletten, in beiden Modi)
+        for (const u of epgUrls) if (!state.epgUrls.includes(u)) state.epgUrls.push(u);
+
+        let added;
+        if (mode === 'replace') {
+            state.channels = channels;
+            state.selectedIds.clear();
+            state.selectedGroup = '__all__';
+            added = channels.length;
+        } else {
+            const known = new Set(state.channels.map(c => c.url));
+            added = 0;
+            for (const ch of channels) {
+                if (known.has(ch.url)) continue; // Duplikat
+                state.channels.push(ch);
+                known.add(ch.url);
+                added++;
+            }
+        }
+
+        setUrlImportLoading(false);
+        closeUrlModal();
+        render();
+
+        const skipped = channels.length - added;
+        showToast(mode === 'replace'
+            ? `Playlist geladen: ${added} Sender übernommen`
+            : `${added} Sender importiert` + (skipped > 0 ? `, ${skipped} Duplikate übersprungen` : ''),
+            'success');
+
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            showUrlStatus('Abgebrochen oder Zeitüberschreitung nach 30&nbsp;Sekunden.', 'error');
+        } else if (err instanceof TypeError) { // „Failed to fetch" → meistens CORS
+            showUrlStatus(
+                'Direkter Zugriff fehlgeschlagen – der Server blockiert vermutlich Browser-Anfragen (CORS). ' +
+                '<button type="button" class="btn btn-sm btn-primary mt-2" onclick="retryUrlImportWithProxy()">Mit Proxy erneut versuchen</button>',
+                'error');
+        } else {
+            showUrlStatus(err.message || 'Unbekannter Fehler beim Import.', 'error');
+        }
+    } finally {
+        clearTimeout(timer);
+        urlImportAbort = null;
+        setUrlImportLoading(false);
+    }
+}
+
+function retryUrlImportWithProxy() {
+    if (!lastUrlImport || urlImportBusy) return;
+    document.getElementById('urlProxyToggle').classList.add('on');
+    doUrlImport(lastUrlImport.url, lastUrlImport.mode);
+}
 
     /* ========================================================
        GRUPPEN AKTIONEN
