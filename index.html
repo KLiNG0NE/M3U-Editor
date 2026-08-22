@@ -485,45 +485,53 @@
     /* ========================================================
        M3U PARSER & GENERATOR
     ======================================================== */
-    function parseM3U(text) {
-        // Entferne BOM am Anfang falls vorhanden
-        if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+function parseM3U(text) {
+    // Entferne BOM am Anfang falls vorhanden
+    if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
 
-        const lines = text.split(/\r?\n/).map(l => l.trim());
-        const channels = [], epgUrls = [];
-        let cur = null;
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            if (!line) continue;
-            if (line.startsWith('#EXTM3U')) {
-                const re = /x-tvg-url\s*=\s*"([^"]*)"/g; let m;
-                while ((m = re.exec(line)) !== null) { if (m[1] && !epgUrls.includes(m[1])) epgUrls.push(m[1]); }
-                continue;
-            }
-            if (line.startsWith('#EXTINF:')) {
-                cur = { id: genId(), name:'', url:'', radio:false, tvg:{id:'',name:'',logo:'',language:'',country:'',url:'',shift:'',chno:'',rec:'',guide:'',source:'',genre:''}, group:'' };
-                const lastComma = line.lastIndexOf(',');
-                if (lastComma !== -1) {
-                    cur.name = line.substring(lastComma + 1).trim();
-                    const re = /([\w][\w-]*)\s*=\s*"([^"]*)"/g; let m;
-                    while ((m = re.exec(line.substring(8, lastComma))) !== null) {
-                        const k=m[1], v=m[2];
-                        switch(k) {
-                            case 'tvg-id': cur.tvg.id=v; break; case 'tvg-name': cur.tvg.name=v; break;
-                            case 'tvg-logo': cur.tvg.logo=v; break; case 'tvg-language': cur.tvg.language=v; break;
-                            case 'tvg-country': cur.tvg.country=v; break; case 'tvg-url': cur.tvg.url=v; break;
-                            case 'tvg-shift': cur.tvg.shift=v; break; case 'tvg-chno': cur.tvg.chno=v; break;
-                            case 'tvg-rec': cur.tvg.rec=v; break; case 'tvg-guide': cur.tvg.guide=v; break;
-                            case 'tvg-source': cur.tvg.source=v; break; case 'tvg-genre': cur.tvg.genre=v; break;
-                            case 'group-title': cur.group=v; break;
-                            case 'radio': cur.radio=(v==='true'||v==='1'); break;
-                        }
-                    }
-                }
-            } else if (!line.startsWith('#') && cur) { cur.url=line; channels.push(cur); cur=null; }
+    const lines = text.split(/\r?\n/).map(l => l.trim());
+    const channels = [], epgUrls = [];
+    let cur = null;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+        if (line.startsWith('#EXTM3U')) {
+            const re = /x-tvg-url\s*=\s*"([^"]*)"/g; let m;
+            while ((m = re.exec(line)) !== null) { if (m[1] && !epgUrls.includes(m[1])) epgUrls.push(m[1]); }
+            continue;
         }
-        return { channels, epgUrls };
+        if (line.startsWith('#EXTINF:')) {
+            cur = { id: genId(), name:'', url:'', radio:false, tvg:{id:'',name:'',logo:'',language:'',country:'',url:'',shift:'',chno:'',rec:'',guide:'',source:'',genre:''}, group:'' };
+            const attrPart = line.substring(8); // alles nach "#EXTINF:"
+            // Trenn-Komma = erstes Komma AUSSERHALB von Anführungszeichen.
+            // So bleiben Kommas in Attributwerten (z.B. group-title="Filme, Serien")
+            // und im Sendernamen (z.B. "Das Erste, HD") erhalten.
+            let commaIdx = -1, inQuotes = false;
+            for (let j = 0; j < attrPart.length; j++) {
+                const c = attrPart.charAt(j);
+                if (c === '"') inQuotes = !inQuotes;
+                else if (c === ',' && !inQuotes) { commaIdx = j; break; }
+            }
+            const attrString = commaIdx !== -1 ? attrPart.substring(0, commaIdx) : attrPart;
+            if (commaIdx !== -1) cur.name = attrPart.substring(commaIdx + 1).trim();
+            const re = /([\w][\w-]*)\s*=\s*"([^"]*)"/g; let m;
+            while ((m = re.exec(attrString)) !== null) {
+                const k=m[1], v=m[2];
+                switch(k) {
+                    case 'tvg-id': cur.tvg.id=v; break; case 'tvg-name': cur.tvg.name=v; break;
+                    case 'tvg-logo': cur.tvg.logo=v; break; case 'tvg-language': cur.tvg.language=v; break;
+                    case 'tvg-country': cur.tvg.country=v; break; case 'tvg-url': cur.tvg.url=v; break;
+                    case 'tvg-shift': cur.tvg.shift=v; break; case 'tvg-chno': cur.tvg.chno=v; break;
+                    case 'tvg-rec': cur.tvg.rec=v; break; case 'tvg-guide': cur.tvg.guide=v; break;
+                    case 'tvg-source': cur.tvg.source=v; break; case 'tvg-genre': cur.tvg.genre=v; break;
+                    case 'group-title': cur.group=v; break;
+                    case 'radio': cur.radio=(v==='true'||v==='1'); break;
+                }
+            }
+        } else if (!line.startsWith('#') && cur) { cur.url=line; channels.push(cur); cur=null; }
     }
+    return { channels, epgUrls };
+}
 
     function generateM3U() {
         let header = '#EXTM3U';
