@@ -704,7 +704,22 @@ function parseM3U(text) {
     }
     function addEpgUrl(){const i=document.getElementById('newEpgUrl'),u=i.value.trim();if(!u){toast('URL eingeben.','warning');return;}if(state.epgUrls.includes(u)){toast('Existiert bereits.','warning');return;}state.epgUrls.push(u);i.value='';renderEpgUrlList();render();toast('EPG-Quelle hinzugefügt.','success');}
     function updateEpgUrl(i,v){v=v.trim();if(!v){removeEpgUrl(i);return;}if(state.epgUrls.some((u,j)=>j!==i&&u===v)){toast('Existiert bereits.','warning');renderEpgUrlList();return;}state.epgUrls[i]=v;render();}
-    function removeEpgUrl(i){state.epgUrls.splice(i,1);renderEpgUrlList();render();toast('EPG-Quelle entfernt.','info');}
+    function removeEpgUrl(i){
+        const url = state.epgUrls[i];
+        if (url === undefined) return;
+    
+        showConfirm(
+            'EPG-Quelle entfernen',
+            'Soll diese EPG-Quelle wirklich entfernt werden? Sie wird anschließend nicht mehr als x-tvg-url in die M3U-Datei exportiert.',
+            `<div class="text-xs font-mono text-gray-300 break-all">${escHtml(url)}</div>`,
+            () => {
+                state.epgUrls.splice(i, 1);
+                renderEpgUrlList();   // Liste im offenen EPG-Modal aktualisieren
+                render();             // Footer-Statistik, EPG-Punkt, LocalStorage
+                showToast('EPG-Quelle entfernt', 'success');
+            }
+        );
+    }
     function moveEpgUrl(i,d){const n=i+d;if(n<0||n>=state.epgUrls.length)return;[state.epgUrls[i],state.epgUrls[n]]=[state.epgUrls[n],state.epgUrls[i]];renderEpgUrlList();render();}
 
     /* ========================================================
