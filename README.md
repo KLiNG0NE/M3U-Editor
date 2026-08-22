@@ -26,4 +26,4 @@ Alternativ kann die Datei ``index.html`` heruntergeladen und in einem Browser ge
 
 ## Screenshot ##
 
-![Screenshot](screenshot.jpg)
+![Screenshot](screenshot.jpg "Screenshot: M3U-Editor")
