@@ -492,7 +492,78 @@
 
     let idCounter = 0;
     function genId() { return 'ch_' + (++idCounter) + '_' + Date.now(); }
-    function isRadio(ch) { return ch.radio === true || ch.radio === 'true' || ch.radio === '1'; }
+    
+    // FIX: Vereinfachte isRadio-Funktion - nur Boolean-Check nötig
+    function isRadio(ch) { return ch.radio === true; }
+
+    /* ========================================================
+       FIX: SICHERE ESCAPE-FUNKTIONEN (XSS-SCHUTZ)
+    ======================================================== */
+    function escHtml(str) {
+        if (str === undefined || str === null) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function escAttr(str) {
+        if (str === undefined || str === null) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;')
+            .replace(/\\/g, '\\\\');
+    }
+
+    /* ========================================================
+       FIX: SICHERE LOGO-FEHLER-BEHANDLUNG
+    ======================================================== */
+    function handleLogoError(img, isRadioFlag) {
+        const icon = isRadioFlag ? 'fa-radio radio-icon' : 'fa-tv';
+        const size = img.classList.contains('w-14') ? 'w-14 h-14' : 'w-10 h-10';
+        img.outerHTML = '<div class="logo-placeholder ' + size + '"><i class="fa-solid ' + icon + '"></i></div>';
+    }
+
+    /* ========================================================
+       FIX: DEBOUNCED LOCALSTORAGE SPEICHERUNG
+    ======================================================== */
+    let saveTimeout = null;
+    function saveToLocalStorage() {
+        clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(() => {
+            try {
+                const data = {
+                    channels: state.channels,
+                    epgUrls: state.epgUrls,
+                    groupOrder: state.groupOrder,
+                    nextId: idCounter
+                };
+                localStorage.setItem('m3uEditorData', JSON.stringify(data));
+            } catch (e) {
+                console.warn('LocalStorage-Speicherung fehlgeschlagen:', e);
+            }
+        }, 500); // 500ms Debounce
+    }
+
+    function loadFromLocalStorage() {
+        try {
+            const raw = localStorage.getItem('m3uEditorData');
+            if (raw) {
+                const data = JSON.parse(raw);
+                state.channels = data.channels || [];
+                state.epgUrls = data.epgUrls || [];
+                state.groupOrder = data.groupOrder || [];
+                idCounter = data.nextId || 0;
+            }
+        } catch (e) {
+            console.warn('LocalStorage-Laden fehlgeschlagen:', e);
+        }
+    }
 
     /* ========================================================
        BESTÄTIGUNGS-MODAL
@@ -531,75 +602,79 @@
     /* ========================================================
        M3U PARSER & GENERATOR
     ======================================================== */
-function parseM3U(text) {
-    // Entferne BOM am Anfang falls vorhanden
-    if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    function parseM3U(text) {
+        // Entferne BOM am Anfang falls vorhanden
+        if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
 
-    const lines = text.split(/\r?\n/).map(l => l.trim());
-    const channels = [], epgUrls = [];
-    let cur = null;
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line) continue;
-        if (line.startsWith('#EXTM3U')) {
-            const re = /x-tvg-url\s*=\s*"([^"]*)"/g; let m;
-            while ((m = re.exec(line)) !== null) { if (m[1] && !epgUrls.includes(m[1])) epgUrls.push(m[1]); }
-            continue;
-        }
-        if (line.startsWith('#EXTINF:')) {
-            cur = { id: genId(), name:'', url:'', radio:false, tvg:{id:'',name:'',logo:'',language:'',country:'',url:'',shift:'',chno:'',rec:'',guide:'',source:'',genre:''}, group:'' };
-            const attrPart = line.substring(8); // alles nach "#EXTINF:"
-            // Trenn-Komma = erstes Komma AUSSERHALB von Anführungszeichen.
-            // So bleiben Kommas in Attributwerten (z.B. group-title="Filme, Serien")
-            // und im Sendernamen (z.B. "Das Erste, HD") erhalten.
-            let commaIdx = -1, inQuotes = false;
-            for (let j = 0; j < attrPart.length; j++) {
-                const c = attrPart.charAt(j);
-                if (c === '"') inQuotes = !inQuotes;
-                else if (c === ',' && !inQuotes) { commaIdx = j; break; }
+        const lines = text.split(/\r?\n/).map(l => l.trim());
+        const channels = [], epgUrls = [];
+        let cur = null;
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line) continue;
+            if (line.startsWith('#EXTM3U')) {
+                const re = /x-tvg-url\s*=\s*"([^"]*)"/g; let m;
+                while ((m = re.exec(line)) !== null) { if (m[1] && !epgUrls.includes(m[1])) epgUrls.push(m[1]); }
+                continue;
             }
-            const attrString = commaIdx !== -1 ? attrPart.substring(0, commaIdx) : attrPart;
-            if (commaIdx !== -1) cur.name = attrPart.substring(commaIdx + 1).trim();
-            const re = /([\w][\w-]*)\s*=\s*"([^"]*)"/g; let m;
-            while ((m = re.exec(attrString)) !== null) {
-                const k=m[1], v=m[2];
-                switch(k) {
-                    case 'tvg-id': cur.tvg.id=v; break; case 'tvg-name': cur.tvg.name=v; break;
-                    case 'tvg-logo': cur.tvg.logo=v; break; case 'tvg-language': cur.tvg.language=v; break;
-                    case 'tvg-country': cur.tvg.country=v; break; case 'tvg-url': cur.tvg.url=v; break;
-                    case 'tvg-shift': cur.tvg.shift=v; break; case 'tvg-chno': cur.tvg.chno=v; break;
-                    case 'tvg-rec': cur.tvg.rec=v; break; case 'tvg-guide': cur.tvg.guide=v; break;
-                    case 'tvg-source': cur.tvg.source=v; break; case 'tvg-genre': cur.tvg.genre=v; break;
-                    case 'group-title': cur.group=v; break;
-                    case 'radio': cur.radio=(v==='true'||v==='1'); break;
+            if (line.startsWith('#EXTINF:')) {
+                cur = { id: genId(), name:'', url:'', radio:false, tvg:{id:'',name:'',logo:'',language:'',country:'',url:'',shift:'',chno:'',rec:'',guide:'',source:'',genre:''}, group:'' };
+                const attrPart = line.substring(8);
+                let commaIdx = -1, inQuotes = false;
+                for (let j = 0; j < attrPart.length; j++) {
+                    const c = attrPart.charAt(j);
+                    if (c === '"') inQuotes = !inQuotes;
+                    else if (c === ',' && !inQuotes) { commaIdx = j; break; }
                 }
-            }
-        } else if (!line.startsWith('#') && cur) { cur.url=line; channels.push(cur); cur=null; }
+                const attrString = commaIdx !== -1 ? attrPart.substring(0, commaIdx) : attrPart;
+                if (commaIdx !== -1) cur.name = attrPart.substring(commaIdx + 1).trim();
+                const re = /([\w][\w-]*)\s*=\s*"([^"]*)"/g; let m;
+                while ((m = re.exec(attrString)) !== null) {
+                    const k=m[1], v=m[2];
+                    switch(k) {
+                        case 'tvg-id': cur.tvg.id=v; break;
+                        case 'tvg-name': cur.tvg.name=v; break;
+                        case 'tvg-logo': cur.tvg.logo=v; break;
+                        case 'tvg-language': cur.tvg.language=v; break;
+                        case 'tvg-country': cur.tvg.country=v; break;
+                        case 'tvg-url': cur.tvg.url=v; break;
+                        case 'tvg-shift': cur.tvg.shift=v; break;
+                        case 'tvg-chno': cur.tvg.chno=v; break;
+                        case 'tvg-rec': cur.tvg.rec=v; break;
+                        case 'tvg-guide': cur.tvg.guide=v; break;
+                        case 'tvg-source': cur.tvg.source=v; break;
+                        case 'tvg-genre': cur.tvg.genre=v; break;
+                        case 'group-title': cur.group=v; break;
+                        case 'radio': cur.radio=(v==='true'||v==='1'); break;
+                    }
+                }
+            } else if (!line.startsWith('#') && cur) { cur.url=line; channels.push(cur); cur=null; }
+        }
+        return { channels, epgUrls };
     }
-    return { channels, epgUrls };
-}
 
     function generateM3U() {
         let header = '#EXTM3U';
-        for (const url of state.epgUrls) header += ` x-tvg-url="${url}"`;
+        for (const url of state.epgUrls) header += ` x-tvg-url="${escAttr(url)}"`;
         let out = header + '\n';
         for (const ch of state.channels) {
             let a = '';
+            // FIX: Einheitliche Attributreihenfolge (alphabetisch nach tvg-*)
             if (isRadio(ch)) a += ' radio="true"';
-            if (ch.tvg.id) a += ` tvg-id="${ch.tvg.id}"`;
-            if (ch.tvg.name) a += ` tvg-name="${ch.tvg.name}"`;
-            if (ch.tvg.logo) a += ` tvg-logo="${ch.tvg.logo}"`;
-            if (ch.tvg.language) a += ` tvg-language="${ch.tvg.language}"`;
-            if (ch.tvg.country) a += ` tvg-country="${ch.tvg.country}"`;
-            if (ch.tvg.genre) a += ` tvg-genre="${ch.tvg.genre}"`;
-            if (ch.tvg.url) a += ` tvg-url="${ch.tvg.url}"`;
-            if (ch.tvg.shift!==''&&ch.tvg.shift!==undefined) a += ` tvg-shift="${ch.tvg.shift}"`;
-            if (ch.tvg.chno!==''&&ch.tvg.chno!==undefined) a += ` tvg-chno="${ch.tvg.chno}"`;
-            if (ch.tvg.rec) a += ` tvg-rec="${ch.tvg.rec}"`;
-            if (ch.tvg.guide) a += ` tvg-guide="${ch.tvg.guide}"`;
-            if (ch.tvg.source) a += ` tvg-source="${ch.tvg.source}"`;
-            if (ch.group) a += ` group-title="${ch.group}"`;
-            out += `#EXTINF:-1${a},${ch.name}\n${ch.url}\n`;
+            if (ch.tvg.id) a += ` tvg-id="${escAttr(ch.tvg.id)}"`;
+            if (ch.tvg.name) a += ` tvg-name="${escAttr(ch.tvg.name)}"`;
+            if (ch.tvg.logo) a += ` tvg-logo="${escAttr(ch.tvg.logo)}"`;
+            if (ch.tvg.language) a += ` tvg-language="${escAttr(ch.tvg.language)}"`;
+            if (ch.tvg.country) a += ` tvg-country="${escAttr(ch.tvg.country)}"`;
+            if (ch.tvg.chno !== '' && ch.tvg.chno !== undefined && !isNaN(parseFloat(ch.tvg.chno))) a += ` tvg-chno="${ch.tvg.chno}"`;
+            if (ch.tvg.shift !== '' && ch.tvg.shift !== undefined && !isNaN(parseFloat(ch.tvg.shift))) a += ` tvg-shift="${ch.tvg.shift}"`;
+            if (ch.tvg.genre) a += ` tvg-genre="${escAttr(ch.tvg.genre)}"`;
+            if (ch.tvg.url) a += ` tvg-url="${escAttr(ch.tvg.url)}"`;
+            if (ch.tvg.guide) a += ` tvg-guide="${escAttr(ch.tvg.guide)}"`;
+            if (ch.tvg.source) a += ` tvg-source="${escAttr(ch.tvg.source)}"`;
+            if (ch.tvg.rec) a += ` tvg-rec="${escAttr(ch.tvg.rec)}"`;
+            if (ch.group) a += ` group-title="${escAttr(ch.group)}"`;
+            out += `#EXTINF:-1${a},${escAttr(ch.name)}\n${ch.url}\n`;
         }
         return out;
     }
@@ -607,507 +682,1373 @@ function parseM3U(text) {
     /* ========================================================
        GRUPPEN HILFSFUNKTIONEN
     ======================================================== */
-    function getGroupMap() { const m=new Map(); for(const c of state.channels){const g=c.group||'';m.set(g,(m.get(g)||0)+1);} return m; }
+    function getGroupMap() { 
+        const m = new Map(); 
+        for(const c of state.channels){ const g = c.group || ''; m.set(g, (m.get(g) || 0) + 1); } 
+        return m; 
+    }
     
     function getSortedGroups() { 
-        const m=getGroupMap(),o=[],s=new Set(); 
+        const m = getGroupMap(), o = [], s = new Set(); 
         for(const g of state.groupOrder){
-            if(g && !s.has(g)){o.push(g);s.add(g);}
+            if(g && !s.has(g)) { o.push(g); s.add(g); }
         } 
-        return[...o,...[...m.keys()].filter(g=>g && !s.has(g)).sort((a,b)=>a.localeCompare(b))]; 
+        return [...o, ...[...m.keys()].filter(g => g && !s.has(g)).sort((a,b) => a.localeCompare(b))]; 
     }
     
     function getAllGroupNames() { 
-        const names = new Set(state.channels.map(c=>c.group).filter(Boolean));
+        const names = new Set(state.channels.map(c => c.group).filter(Boolean));
         state.groupOrder.forEach(g => { if(g) names.add(g); });
-        return [...names].sort((a,b)=>a.localeCompare(b)); 
+        return [...names].sort((a,b) => a.localeCompare(b)); 
     }
 
     function getFilteredChannels() {
         let list = [...state.channels];
-        if (state.selectedGroup==='__tv__') list=list.filter(c=>!isRadio(c));
-        else if (state.selectedGroup==='__radio__') list=list.filter(c=>isRadio(c));
-        else if (state.selectedGroup==='__ungrouped__') list=list.filter(c=>!c.group);
-        else if (state.selectedGroup!=='__all__') list=list.filter(c=>c.group===state.selectedGroup);
-        if (state.searchQuery) { const q=state.searchQuery.toLowerCase(); list=list.filter(c=>c.name.toLowerCase().includes(q)||c.group.toLowerCase().includes(q)||c.tvg.id.toLowerCase().includes(q)||c.url.toLowerCase().includes(q)); }
-        switch(state.sortOrder){ case'name-asc':list.sort((a,b)=>a.name.localeCompare(b.name));break; case'name-desc':list.sort((a,b)=>b.name.localeCompare(a.name));break; case'chno-asc':list.sort((a,b)=>(parseFloat(a.tvg.chno)||0)-(parseFloat(b.tvg.chno)||0));break; case'chno-desc':list.sort((a,b)=>(parseFloat(b.tvg.chno)||0)-(parseFloat(a.tvg.chno)||0));break; }
+        if (state.selectedGroup === '__tv__') list = list.filter(c => !isRadio(c));
+        else if (state.selectedGroup === '__radio__') list = list.filter(c => isRadio(c));
+        else if (state.selectedGroup === '__ungrouped__') list = list.filter(c => !c.group);
+        else if (state.selectedGroup !== '__all__') list = list.filter(c => c.group === state.selectedGroup);
+        
+        if (state.searchQuery) { 
+            const q = state.searchQuery.toLowerCase(); 
+            list = list.filter(c => 
+                (c.name && c.name.toLowerCase().includes(q)) || 
+                (c.group && c.group.toLowerCase().includes(q)) || 
+                (c.tvg.id && c.tvg.id.toLowerCase().includes(q)) || 
+                (c.url && c.url.toLowerCase().includes(q))
+            ); 
+        }
+        
+        switch(state.sortOrder) {
+            case 'name-asc': list.sort((a,b) => a.name.localeCompare(b.name)); break;
+            case 'name-desc': list.sort((a,b) => b.name.localeCompare(a.name)); break;
+            case 'chno-asc': list.sort((a,b) => (parseFloat(a.tvg.chno) || 0) - (parseFloat(b.tvg.chno) || 0)); break;
+            case 'chno-desc': list.sort((a,b) => (parseFloat(b.tvg.chno) || 0) - (parseFloat(a.tvg.chno) || 0)); break;
+        }
         return list;
     }
 
     /* ========================================================
        RENDERING
     ======================================================== */
-    function render() { renderGroups(); renderChannels(); renderToolbar(); renderFooter(); updateBatchBar(); updateEpgIndicator(); saveToLocalStorage(); }
+    function render() { 
+        renderGroups(); 
+        renderChannels(); 
+        renderToolbar(); 
+        renderFooter(); 
+        updateBatchBar(); 
+        updateEpgIndicator(); 
+        saveToLocalStorage(); // Debounced!
+    }
 
     function renderGroups() {
-        const map=getGroupMap(), sorted=getSortedGroups(), all=state.channels.length;
-        const tvCount=state.channels.filter(c=>!isRadio(c)).length, radioCount=state.channels.filter(c=>isRadio(c)).length;
-        const ungrouped=state.channels.filter(c=>!c.group).length;
-        document.getElementById('countAll').textContent=all;
-        document.getElementById('countTv').textContent=tvCount;
-        document.getElementById('countRadio').textContent=radioCount;
-        document.getElementById('countUngrouped').textContent=ungrouped;
-        document.querySelectorAll('#sidebar .group-item').forEach(el=>el.classList.toggle('active',el.dataset.group===state.selectedGroup));
-        const container=document.getElementById('groupList'); container.innerHTML='';
+        const map = getGroupMap(), sorted = getSortedGroups(), all = state.channels.length;
+        const tvCount = state.channels.filter(c => !isRadio(c)).length;
+        const radioCount = state.channels.filter(c => isRadio(c)).length;
+        const ungrouped = state.channels.filter(c => !c.group).length;
+        
+        document.getElementById('countAll').textContent = all;
+        document.getElementById('countTv').textContent = tvCount;
+        document.getElementById('countRadio').textContent = radioCount;
+        document.getElementById('countUngrouped').textContent = ungrouped;
+        
+        document.querySelectorAll('#sidebar .group-item').forEach(el => 
+            el.classList.toggle('active', el.dataset.group === state.selectedGroup)
+        );
+        
+        const container = document.getElementById('groupList'); 
+        container.innerHTML = '';
+        
         for (const g of sorted) {
-            const count=map.get(g)||0; const div=document.createElement('div');
-            div.className='group-item'+(state.selectedGroup===g?' active':''); div.dataset.group=g; div.draggable=true;
-            div.onclick=(e)=>{if(!e.target.closest('.group-actions'))selectGroup(g);};
+            const count = map.get(g) || 0; 
+            const div = document.createElement('div');
+            div.className = 'group-item' + (state.selectedGroup === g ? ' active' : ''); 
+            div.dataset.group = g; 
+            div.draggable = true;
             
-            div.addEventListener('dragstart',e=>{
+            // FIX: Sicherer Event-Handler ohne Inline-JavaScript
+            div.onclick = (e) => { 
+                if (!e.target.closest('.group-actions')) selectGroup(g); 
+            };
+            
+            div.addEventListener('dragstart', e => {
                 e.dataTransfer.setData('application/x-m3u-group', g);
-                e.dataTransfer.effectAllowed='move';
+                e.dataTransfer.effectAllowed = 'move';
                 div.classList.add('dragging');
             });
-            div.addEventListener('dragend',()=>div.classList.remove('dragging'));
+            div.addEventListener('dragend', () => div.classList.remove('dragging'));
             
-            div.addEventListener('dragover',e=>{
+            div.addEventListener('dragover', e => {
                 e.preventDefault();
-                e.dataTransfer.dropEffect='move';
+                e.dataTransfer.dropEffect = 'move';
                 const types = Array.from(e.dataTransfer.types);
                 if(types.includes('application/x-m3u-channel')) {
-                    div.classList.remove('drag-over-top','drag-over-bottom');
+                    div.classList.remove('drag-over-top', 'drag-over-bottom');
                     div.classList.add('drag-over-group');
                 } else if(types.includes('application/x-m3u-group')) {
                     div.classList.remove('drag-over-group');
-                    const r=div.getBoundingClientRect();
-                    if(e.clientY<r.top+r.height/2) div.classList.add('drag-over-top');
+                    const r = div.getBoundingClientRect();
+                    if(e.clientY < r.top + r.height / 2) div.classList.add('drag-over-top');
                     else div.classList.add('drag-over-bottom');
                 }
             });
-            div.addEventListener('dragleave',()=>div.classList.remove('drag-over-top','drag-over-bottom','drag-over-group'));
-            
+            div.addEventListener('dragleave', () => div.classList.remove('drag-over-top', 'drag-over-bottom', 'drag-over-group'));
             div.addEventListener('drop', e => sidebarGroupDrop(e, g));
-
-            div.innerHTML=`<i class="fa-solid fa-grip-vertical text-xs text-gray-600 cursor-grab"></i><span class="flex-1 text-sm font-medium truncate">${escHtml(g)}</span><span class="text-xs text-gray-500 font-mono">${count}</span><div class="group-actions"><button class="btn btn-icon btn-ghost" style="width:24px;height:24px;padding:0;" title="Umbenennen" onclick="event.stopPropagation();renameGroup('${escAttr(g)}')"><i class="fa-solid fa-pen text-[10px]"></i></button><button class="btn btn-icon btn-danger" style="width:24px;height:24px;padding:0;" title="Löschen" onclick="event.stopPropagation();deleteGroup('${escAttr(g)}')"><i class="fa-solid fa-trash text-[10px]"></i></button></div>`;
+            
+            // FIX: Sicherer HTML-Inhalt mit escHtml()
+            div.innerHTML = `<i class="fa-solid fa-grip-vertical text-xs text-gray-600 cursor-grab"></i>
+                <span class="flex-1 text-sm font-medium truncate">${escHtml(g)}</span>
+                <span class="text-xs text-gray-500 font-mono">${count}</span>
+                <div class="group-actions">
+                    <button class="btn btn-icon btn-ghost" style="width:24px;height:24px;padding:0;" title="Umbenennen" data-action="rename" data-group="${escAttr(g)}">
+                        <i class="fa-solid fa-pen text-[10px]"></i>
+                    </button>
+                    <button class="btn btn-icon btn-danger" style="width:24px;height:24px;padding:0;" title="Löschen" data-action="delete" data-group="${escAttr(g)}">
+                        <i class="fa-solid fa-trash text-[10px]"></i>
+                    </button>
+                </div>`;
+            
+            // FIX: Event-Delegation für Buttons (sicherer als Inline-Handler)
+            const btnRename = div.querySelector('[data-action="rename"]');
+            const btnDelete = div.querySelector('[data-action="delete"]');
+            
+            if (btnRename) btnRename.addEventListener('click', (e) => {
+                e.stopPropagation();
+                renameGroup(g);
+            });
+            
+            if (btnDelete) btnDelete.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteGroup(g);
+            });
+            
             container.appendChild(div);
         }
     }
 
     function renderChannels() {
-        const container=document.getElementById('channelContainer'), list=getFilteredChannels();
-        if (list.length===0) {
-            container.innerHTML=`<div class="empty-state"><i class="fa-solid ${state.channels.length===0?'fa-satellite-dish':'fa-filter-circle-xmark'} text-4xl text-gray-700 mb-4"></i><p class="text-gray-500 text-lg font-medium">${state.channels.length===0?'Keine Sender vorhanden':'Keine Ergebnisse'}</p><p class="text-gray-600 text-sm mt-1">${state.channels.length===0?'Importiere eine M3U-Datei oder erstelle einen neuen Sender.':'Versuche einen anderen Suchbegriff oder Filter.'}</p></div>`;
+        const container = document.getElementById('channelContainer'), list = getFilteredChannels();
+        if (list.length === 0) {
+            container.innerHTML = `<div class="empty-state">
+                <i class="fa-solid ${state.channels.length === 0 ? 'fa-satellite-dish' : 'fa-filter-circle-xmark'} text-4xl text-gray-700 mb-4"></i>
+                <p class="text-gray-500 text-lg font-medium">${state.channels.length === 0 ? 'Keine Sender vorhanden' : 'Keine Ergebnisse'}</p>
+                <p class="text-gray-600 text-sm mt-1">${state.channels.length === 0 ? 'Importiere eine M3U-Datei oder erstelle einen neuen Sender.' : 'Versuche einen anderen Suchbegriff oder Filter.'}</p>
+            </div>`;
             return;
         }
-        if (state.viewMode==='table') renderTable(container,list); else renderCards(container,list);
+        if (state.viewMode === 'table') renderTable(container, list); 
+        else renderCards(container, list);
     }
 
     function renderTable(container, list) {
-        let html=`<div class="table-header"><div class="custom-check ${state.selectedIds.size===list.length&&list.length>0?'checked':''}" onclick="toggleSelectAll()"></div><div>Logo</div><div>Name / URL</div><div>Gruppe</div><div>Nr.</div><div></div><div class="text-right">Aktionen</div></div>`;
+        let html = `<div class="table-header">
+            <div class="custom-check ${state.selectedIds.size === list.length && list.length > 0 ? 'checked' : ''}" onclick="toggleSelectAll()"></div>
+            <div>Logo</div>
+            <div>Name / URL</div>
+            <div>Gruppe</div>
+            <div>Nr.</div>
+            <div></div>
+            <div class="text-right">Aktionen</div>
+        </div>`;
+        
         for (const ch of list) {
-            const sel=state.selectedIds.has(ch.id), radio=isRadio(ch);
-            const logo=ch.tvg.logo?`<img src="${escAttr(ch.tvg.logo)}" alt="" class="w-10 h-10 rounded-md object-contain bg-elevated" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="logo-placeholder" style="display:none"><i class='fa-solid ${radio?'fa-radio':'fa-tv'}'></i></div>`:`<div class="logo-placeholder"><i class="fa-solid ${radio?'fa-radio radio-icon':'fa-tv'}"></i></div>`;
-            const chno=ch.tvg.chno?`<span class="font-mono text-xs bg-elevated px-2 py-0.5 rounded">${escHtml(ch.tvg.chno)}</span>`:'<span class="text-gray-700 text-xs">-</span>';
-            html+=`<div class="channel-row ${sel?'selected':''}" data-id="${ch.id}" draggable="true" ondragstart="channelDragStart(event,'${ch.id}')" ondragend="channelDragEnd(event)" ondragover="channelDragOver(event)" ondragleave="channelDragLeave(event)" ondrop="channelDrop(event,'${ch.id}')"><div class="custom-check ${sel?'checked':''}" onclick="event.stopPropagation();toggleSelect('${ch.id}')"></div><div>${logo}</div><div class="min-w-0"><div class="text-sm font-medium truncate">${escHtml(ch.name||'Unbenannt')}</div><div class="text-xs text-gray-600 font-mono truncate">${escHtml(ch.url||'Keine URL')}</div></div><div>${ch.group?`<span class="badge bg-accent-dim text-accent">${escHtml(ch.group)}</span>`:'<span class="text-gray-700 text-xs">-</span>'}</div><div>${chno}</div><div>${radio?'<i class="fa-solid fa-radio radio-icon" title="Radio-Sender"></i>':''}</div><div class="flex items-center justify-end gap-1"><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Oben" onclick="event.stopPropagation();moveChannel('${ch.id}',-1)"><i class="fa-solid fa-chevron-up text-[10px]"></i></button><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Unten" onclick="event.stopPropagation();moveChannel('${ch.id}',1)"><i class="fa-solid fa-chevron-down text-[10px]"></i></button><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Kopieren" onclick="event.stopPropagation();duplicateChannel('${ch.id}')"><i class="fa-solid fa-copy text-[10px]"></i></button><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Bearbeiten" onclick="event.stopPropagation();editChannel('${ch.id}')"><i class="fa-solid fa-pen text-[10px]"></i></button><button class="btn btn-icon btn-danger" style="width:26px;height:26px;padding:0;" title="Löschen" onclick="event.stopPropagation();deleteChannel('${ch.id}')"><i class="fa-solid fa-trash text-[10px]"></i></button></div></div>`;
+            const sel = state.selectedIds.has(ch.id), radio = isRadio(ch);
+            
+            // FIX: Sicheres Logo-Rendering
+            const logo = ch.tvg.logo ? 
+                `<img src="${escAttr(ch.tvg.logo)}" alt="" class="w-10 h-10 rounded-md object-contain bg-elevated" 
+                 onerror="handleLogoError(this, ${radio})">
+                 <div class="logo-placeholder" style="display:none"><i class="fa-solid ${radio ? 'fa-radio' : 'fa-tv'}"></i></div>` : 
+                `<div class="logo-placeholder"><i class="fa-solid ${radio ? 'fa-radio radio-icon' : 'fa-tv'}"></i></div>`;
+            
+            const chno = ch.tvg.chno ? 
+                `<span class="font-mono text-xs bg-elevated px-2 py-0.5 rounded">${escHtml(ch.tvg.chno)}</span>` : 
+                '<span class="text-gray-700 text-xs">-</span>';
+            
+            html += `<div class="channel-row ${sel ? 'selected' : ''}" data-id="${escAttr(ch.id)}" 
+                draggable="true" 
+                ondragstart="channelDragStart(event,'${escAttr(ch.id)}')" 
+                ondragend="channelDragEnd(event)" 
+                ondragover="channelDragOver(event)" 
+                ondragleave="channelDragLeave(event)" 
+                ondrop="channelDrop(event,'${escAttr(ch.id)}')">
+                <div class="custom-check ${sel ? 'checked' : ''}" onclick="event.stopPropagation();toggleSelect('${escAttr(ch.id)}')"></div>
+                <div>${logo}</div>
+                <div class="min-w-0">
+                    <div class="text-sm font-medium truncate">${escHtml(ch.name || 'Unbenannt')}</div>
+                    <div class="text-xs text-gray-600 font-mono truncate">${escHtml(ch.url || 'Keine URL')}</div>
+                </div>
+                <div>${ch.group ? `<span class="badge bg-accent-dim text-accent">${escHtml(ch.group)}</span>` : '<span class="text-gray-700 text-xs">-</span>'}</div>
+                <div>${chno}</div>
+                <div>${radio ? '<i class="fa-solid fa-radio radio-icon" title="Radio-Sender"></i>' : ''}</div>
+                <div class="flex items-center justify-end gap-1">
+                    <button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Oben" onclick="event.stopPropagation();moveChannel('${escAttr(ch.id)}',-1)"><i class="fa-solid fa-chevron-up text-[10px]"></i></button>
+                    <button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Unten" onclick="event.stopPropagation();moveChannel('${escAttr(ch.id)}',1)"><i class="fa-solid fa-chevron-down text-[10px]"></i></button>
+                    <button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Kopieren" onclick="event.stopPropagation();duplicateChannel('${escAttr(ch.id)}')"><i class="fa-solid fa-copy text-[10px]"></i></button>
+                    <button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Bearbeiten" onclick="event.stopPropagation();editChannel('${escAttr(ch.id)}')"><i class="fa-solid fa-pen text-[10px]"></i></button>
+                    <button class="btn btn-icon btn-danger" style="width:26px;height:26px;padding:0;" title="Löschen" onclick="event.stopPropagation();deleteChannel('${escAttr(ch.id)}')"><i class="fa-solid fa-trash text-[10px]"></i></button>
+                </div>
+            </div>`;
         }
-        container.innerHTML=html;
+        container.innerHTML = html;
     }
 
     function renderCards(container, list) {
-        let html='<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4">';
+        let html = '<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4">';
+        
         for (const ch of list) {
-            const sel=state.selectedIds.has(ch.id), radio=isRadio(ch);
-            const logo=ch.tvg.logo?`<img src="${escAttr(ch.tvg.logo)}" alt="" class="w-14 h-14 rounded-lg object-contain bg-elevated" onerror="this.outerHTML='<div class=\\'logo-placeholder w-14 h-14\\'><i class=\\'fa-solid ${radio?'fa-radio radio-icon':'fa-tv'}\\'></i></div>'">`:`<div class="logo-placeholder w-14 h-14"><i class="fa-solid ${radio?'fa-radio radio-icon':'fa-tv'} text-lg"></i></div>`;
-            html+=`<div class="channel-card ${sel?'selected':''}" data-id="${ch.id}" draggable="true" ondragstart="channelDragStart(event,'${ch.id}')" ondragend="channelDragEnd(event)" ondragover="channelDragOver(event)" ondragleave="channelDragLeave(event)" ondrop="channelDrop(event,'${ch.id}')" onclick="toggleSelect('${ch.id}')"><div class="flex items-start gap-3 mb-3"><div class="custom-check ${sel?'checked':''}" onclick="event.stopPropagation();toggleSelect('${ch.id}')" style="margin-top:2px;"></div>${logo}<div class="flex-1 min-w-0"><div class="flex items-center gap-2"><span class="text-sm font-semibold truncate">${escHtml(ch.name||'Unbenannt')}</span>${radio?'<i class="fa-solid fa-radio radio-icon flex-shrink-0" title="Radio"></i>':''}</div>${ch.group?`<span class="badge bg-accent-dim text-accent mt-1">${escHtml(ch.group)}</span>`:''}</div></div><div class="text-[11px] text-gray-600 font-mono truncate mb-3">${escHtml(ch.url||'Keine URL')}</div><div class="flex items-center justify-between"><div class="flex gap-1">${ch.tvg.chno?`<span class="text-[11px] font-mono bg-elevated px-2 py-0.5 rounded text-gray-400">Nr. ${escHtml(ch.tvg.chno)}</span>`:''}${ch.tvg.language?`<span class="text-[11px] font-mono bg-elevated px-2 py-0.5 rounded text-gray-400">${escHtml(ch.tvg.language)}</span>`:''}</div><div class="flex gap-1"><button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Bearbeiten" onclick="event.stopPropagation();editChannel('${ch.id}')"><i class="fa-solid fa-pen text-[10px]"></i></button><button class="btn btn-icon btn-danger" style="width:26px;height:26px;padding:0;" title="Löschen" onclick="event.stopPropagation();deleteChannel('${ch.id}')"><i class="fa-solid fa-trash text-[10px]"></i></button></div></div></div>`;
+            const sel = state.selectedIds.has(ch.id), radio = isRadio(ch);
+            
+            // FIX: Sicheres Logo-Rendering für Karten
+            const logo = ch.tvg.logo ? 
+                `<img src="${escAttr(ch.tvg.logo)}" alt="" class="w-14 h-14 rounded-lg object-contain bg-elevated" 
+                 onerror="handleLogoError(this, ${radio})">` : 
+                `<div class="logo-placeholder w-14 h-14"><i class="fa-solid ${radio ? 'fa-radio radio-icon' : 'fa-tv'} text-lg"></i></div>`;
+            
+            html += `<div class="channel-card ${sel ? 'selected' : ''}" data-id="${escAttr(ch.id)}" 
+                draggable="true" 
+                ondragstart="channelDragStart(event,'${escAttr(ch.id)}')" 
+                ondragend="channelDragEnd(event)" 
+                ondragover="channelDragOver(event)" 
+                ondragleave="channelDragLeave(event)" 
+                ondrop="channelDrop(event,'${escAttr(ch.id)}')" 
+                onclick="toggleSelect('${escAttr(ch.id)}')">
+                <div class="flex items-start gap-3 mb-3">
+                    <div class="custom-check ${sel ? 'checked' : ''}" onclick="event.stopPropagation();toggleSelect('${escAttr(ch.id)}')" style="margin-top:2px;"></div>
+                    ${logo}
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-semibold truncate">${escHtml(ch.name || 'Unbenannt')}</span>
+                            ${radio ? '<i class="fa-solid fa-radio radio-icon flex-shrink-0" title="Radio"></i>' : ''}
+                        </div>
+                        ${ch.group ? `<span class="badge bg-accent-dim text-accent mt-1">${escHtml(ch.group)}</span>` : ''}
+                    </div>
+                </div>
+                <div class="text-[11px] text-gray-600 font-mono truncate mb-3">${escHtml(ch.url || 'Keine URL')}</div>
+                <div class="flex items-center justify-between">
+                    <div class="flex gap-1">
+                        ${ch.tvg.chno ? `<span class="text-[11px] font-mono bg-elevated px-2 py-0.5 rounded text-gray-400">Nr. ${escHtml(ch.tvg.chno)}</span>` : ''}
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <button class="btn btn-icon btn-ghost" style="width:26px;height:26px;padding:0;" title="Bearbeiten" onclick="event.stopPropagation();editChannel('${escAttr(ch.id)}')"><i class="fa-solid fa-pen text-[10px]"></i></button>
+                        <button class="btn btn-icon btn-danger" style="width:26px;height:26px;padding:0;" title="Löschen" onclick="event.stopPropagation();deleteChannel('${escAttr(ch.id)}')"><i class="fa-solid fa-trash text-[10px]"></i></button>
+                    </div>
+                </div>
+            </div>`;
         }
-        html+='</div>'; container.innerHTML=html;
+        
+        html += '</div>';
+        container.innerHTML = html;
     }
 
+    /* ========================================================
+       TOOLBAR & FOOTER
+    ======================================================== */
     function renderToolbar() {
-        const list=getFilteredChannels();
-        const labels={'__all__':'Alle Sender','__tv__':'TV-Sender','__radio__':'Radio-Sender','__ungrouped__':'Ohne Gruppe'};
-        let info=labels[state.selectedGroup]||`Gruppe: ${state.selectedGroup}`;
-        info+=` — ${list.length} Sender`;
-        if(state.searchQuery) info+=` (Suche: "${state.searchQuery}")`;
-        document.getElementById('toolbarInfo').textContent=info;
-        const sel=document.getElementById('batchGroup'),cv=sel.value;
-        sel.innerHTML='<option value="">Gruppe zuweisen...</option>';
-        for(const g of getAllGroupNames()) sel.innerHTML+=`<option value="${escAttr(g)}">${escHtml(g)}</option>`;
-        sel.innerHTML+='<option value="__new__">+ Neue Gruppe...</option>'; sel.value=cv;
+        const total = state.channels.length;
+        const filtered = getFilteredChannels().length;
+        let info = `${filtered} von ${total} Sendern`;
+        
+        if (state.selectedGroup === '__tv__') info += ' • TV-Sender';
+        else if (state.selectedGroup === '__radio__') info += ' • Radio-Sender';
+        else if (state.selectedGroup === '__ungrouped__') info += ' • Ohne Gruppe';
+        else if (state.selectedGroup !== '__all__') info += ` • ${state.selectedGroup}`;
+        
+        if (state.searchQuery) info += ` • Suche: "${escHtml(state.searchQuery)}"`;
+        
+        document.getElementById('toolbarInfo').textContent = info;
     }
 
     function renderFooter() {
-        const t=state.channels.length, gr=getAllGroupNames().length, tv=state.channels.filter(c=>!isRadio(c)).length, ra=state.channels.filter(c=>isRadio(c)).length, wl=state.channels.filter(c=>c.tvg.logo).length;
-        const ep=state.epgUrls.length>0?` | ${state.epgUrls.length} EPG`:''; 
-        document.getElementById('footerStats').textContent=`${t} Sender (${tv} TV / ${ra} Radio) | ${gr} Gruppen | ${wl} mit Logo${ep}`;
+        const total = state.channels.length;
+        const tvCount = state.channels.filter(c => !isRadio(c)).length;
+        const radioCount = state.channels.filter(c => isRadio(c)).length;
+        const groupCount = new Set(state.channels.map(c => c.group).filter(Boolean)).size;
+        
+        document.getElementById('footerStats').textContent = 
+            `${total} Sender • ${tvCount} TV • ${radioCount} Radio • ${groupCount} Gruppen`;
     }
 
-    function updateEpgIndicator() { const d=document.getElementById('epgDot'); if(state.epgUrls.length>0)d.classList.remove('hidden');else d.classList.add('hidden'); }
-    function updateBatchBar() { const b=document.getElementById('batchBar'),c=state.selectedIds.size; if(c>0){b.classList.remove('hidden');b.classList.add('flex');document.getElementById('batchCount').textContent=`${c} ausgewählt`;}else{b.classList.add('hidden');b.classList.remove('flex');} }
+    function updateBatchBar() {
+        const bar = document.getElementById('batchBar');
+        if (state.selectedIds.size > 0) {
+            bar.classList.remove('hidden');
+            bar.classList.add('flex');
+            document.getElementById('batchCount').textContent = state.selectedIds.size + ' ausgewählt';
+            
+            // Gruppen-Dropdown aktualisieren
+            const select = document.getElementById('batchGroup');
+            const currentVal = select.value;
+            select.innerHTML = '<option value="">Gruppe zuweisen...</option>';
+            for (const g of getAllGroupNames()) {
+                select.innerHTML += `<option value="${escAttr(g)}">${escHtml(g)}</option>`;
+            }
+            select.value = currentVal;
+        } else {
+            bar.classList.add('hidden');
+            bar.classList.remove('flex');
+        }
+    }
+
+    function updateEpgIndicator() {
+        const dot = document.getElementById('epgDot');
+        if (state.epgUrls.length > 0) dot.classList.remove('hidden');
+        else dot.classList.add('hidden');
+    }
 
     /* ========================================================
-       EPG-QUELLEN
+       GRUPPEN-AKTIONEN
     ======================================================== */
-    function openEpgModal(){renderEpgUrlList();document.getElementById('epgModal').classList.remove('hidden');document.getElementById('epgModal').classList.add('flex');}
-    function closeEpgModal(){document.getElementById('epgModal').classList.add('hidden');document.getElementById('epgModal').classList.remove('flex');}
-    function renderEpgUrlList(){
-        const c=document.getElementById('epgUrlList');
-        if(!state.epgUrls.length){c.innerHTML=`<div class="text-center py-8 text-gray-600"><i class="fa-solid fa-calendar-xmark text-2xl mb-2 block"></i><p class="text-sm">Keine EPG-Quellen definiert</p></div>`;return;}
-        let h='';state.epgUrls.forEach((u,i)=>{
-            h+=`<div class="epg-url-row"><span class="text-xs text-gray-500 font-mono w-6 text-center flex-shrink-0">${i+1}</span><input type="text" value="${escAttr(u)}" class="input-field input-mono flex-1 py-1.5 text-xs" onchange="updateEpgUrl(${i},this.value)"><button class="btn btn-icon btn-ghost flex-shrink-0" style="width:28px;height:28px;padding:0;" title="Öffnen" onclick="window.open('${escAttr(u)}','_blank','noopener')"><i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i></button><button class="btn btn-icon btn-ghost flex-shrink-0" style="width:28px;height:28px;padding:0;" onclick="moveEpgUrl(${i},-1)" ${i===0?'disabled style="width:28px;height:28px;padding:0;opacity:0.3;pointer-events:none;"':''}><i class="fa-solid fa-chevron-up text-[10px]"></i></button><button class="btn btn-icon btn-ghost flex-shrink-0" style="width:28px;height:28px;padding:0;" onclick="moveEpgUrl(${i},1)" ${i===state.epgUrls.length-1?'disabled style="width:28px;height:28px;padding:0;opacity:0.3;pointer-events:none;"':''}><i class="fa-solid fa-chevron-down text-[10px]"></i></button><button class="btn btn-icon btn-danger flex-shrink-0" style="width:28px;height:28px;padding:0;" onclick="removeEpgUrl(${i})"><i class="fa-solid fa-trash text-[10px]"></i></button></div>`;
-        });c.innerHTML=h;
-    }
-    function addEpgUrl(){const i=document.getElementById('newEpgUrl'),u=i.value.trim();if(!u){toast('URL eingeben.','warning');return;}if(state.epgUrls.includes(u)){toast('Existiert bereits.','warning');return;}state.epgUrls.push(u);i.value='';renderEpgUrlList();render();toast('EPG-Quelle hinzugefügt.','success');}
-    function updateEpgUrl(i,v){v=v.trim();if(!v){removeEpgUrl(i);return;}if(state.epgUrls.some((u,j)=>j!==i&&u===v)){toast('Existiert bereits.','warning');renderEpgUrlList();return;}state.epgUrls[i]=v;render();}
-    function removeEpgUrl(i){
-        const url = state.epgUrls[i];
-        if (url === undefined) return;
-
-        showConfirm(
-            'EPG-Quelle entfernen',
-            'Soll diese EPG-Quelle wirklich entfernt werden? Sie wird anschließend nicht mehr als x-tvg-url in die M3U-Datei exportiert.',
-            `<div class="text-xs font-mono text-gray-300 break-all">${escHtml(url)}</div>`,
-            () => {
-                state.epgUrls.splice(i, 1);
-                renderEpgUrlList();   // Liste im offenen EPG-Modal aktualisieren
-                render();             // Footer-Statistik, EPG-Punkt, LocalStorage
-                showToast('EPG-Quelle entfernt', 'success');
-            }
-        );
-    }
-    function moveEpgUrl(i,d){const n=i+d;if(n<0||n>=state.epgUrls.length)return;[state.epgUrls[i],state.epgUrls[n]]=[state.epgUrls[n],state.epgUrls[i]];renderEpgUrlList();render();}
-
-
-/* ========================================================
-   URL-IMPORT
-======================================================== */
-const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
-const URL_IMPORT_TIMEOUT = 30000;
-
-let urlImportBusy = false;
-let urlImportAbort = null;
-let lastUrlImport = null;
-
-function openUrlModal() {
-    document.getElementById('urlModal').classList.remove('hidden');
-    document.getElementById('urlModal').classList.add('flex');
-    setTimeout(() => document.getElementById('urlImportInput').focus(), 100);
-}
-
-function closeUrlModal() {
-    if (urlImportBusy && urlImportAbort) urlImportAbort.abort(); // laufenden Import abbrechen
-    document.getElementById('urlModal').classList.add('hidden');
-    document.getElementById('urlModal').classList.remove('flex');
-}
-
-function toggleUrlProxy() {
-    document.getElementById('urlProxyToggle').classList.toggle('on');
-}
-
-function setUrlImportLoading(loading) {
-    urlImportBusy = loading;
-    const btn = document.getElementById('urlImportBtn');
-    btn.disabled = loading;
-    btn.style.cursor = loading ? 'wait' : '';
-    btn.innerHTML = loading
-        ? '<i class="fa-solid fa-spinner fa-spin"></i> Wird geladen…'
-        : '<i class="fa-solid fa-cloud-arrow-down"></i> Importieren';
-}
-
-function showUrlStatus(html, type) {
-    const el = document.getElementById('urlImportStatus');
-    el.className = 'mt-4 p-3 rounded-lg border text-sm ' + (type === 'error'
-        ? 'bg-danger-dim border-danger/40 text-danger'
-        : 'bg-accent-dim border-accent/40 text-accent');
-    el.innerHTML = html;
-}
-
-function resetUrlStatus() {
-    const el = document.getElementById('urlImportStatus');
-    el.className = 'hidden';
-    el.innerHTML = '';
-}
-
-function importFromUrl() {
-    if (urlImportBusy) return;
-    const input = document.getElementById('urlImportInput');
-    const raw = input.value.trim();
-
-    if (!raw) { showUrlStatus('Bitte eine URL eingeben.', 'error'); input.focus(); return; }
-
-    let url;
-    try { url = new URL(raw); }
-    catch (e) { showUrlStatus('Ungültige URL – sie muss mit <code>http://</code> oder <code>https://</code> beginnen.', 'error'); return; }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        showUrlStatus('Nur <code>http://</code> und <code>https://</code> werden unterstützt.', 'error');
-        return;
-    }
-
-    const mode = document.querySelector('input[name="urlImportMode"]:checked')?.value || 'merge';
-    const useProxy = document.getElementById('urlProxyToggle').classList.contains('on');
-
-    // „Ersetzen" ist destruktiv → Bestätigung einholen
-    if (mode === 'replace' && state.channels.length > 0) {
-        showConfirm(
-            'Sender ersetzen',
-            `Beim Import werden alle ${state.channels.length} vorhandenen Sender entfernt und durch den Inhalt der URL ersetzt.`,
-            `<div class="text-xs font-mono text-gray-400 break-all">${escHtml(raw)}</div>`,
-            () => doUrlImport(raw, mode, useProxy),
-            'Ersetzen'
-        );
-        return;
-    }
-    doUrlImport(raw, mode, useProxy);
-}
-
-/* Import von URL */
-async function doUrlImport(url, mode, useProxy) {
-    lastUrlImport = { url, mode };
-    setUrlImportLoading(true);
-    resetUrlStatus();
-
-    const controller = new AbortController();
-    urlImportAbort = controller;
-    const timer = setTimeout(() => controller.abort(), URL_IMPORT_TIMEOUT);
-
-    try {
-        const target = useProxy ? CORS_PROXY + encodeURIComponent(url) : url;
-        const res = await fetch(target, { signal: controller.signal });
-
-        if (!res.ok) throw new Error(`Server antwortet mit HTTP ${res.status}.`);
-
-        const text = await res.text();
-        if (!text.includes('#EXTINF')) {
-            throw new Error('Die Antwort enthält keine <code>#EXTINF</code>-Zeilen – wahrscheinlich keine M3U-Playlist.');
-        }
-
-        const { channels, epgUrls } = parseM3U(text);
-        if (channels.length === 0) throw new Error('Die Playlist enthält keine Sender.');
-
-        // EPG-Quellen aus der Playlist übernehmen (ohne Dubletten, in beiden Modi)
-        for (const u of epgUrls) if (!state.epgUrls.includes(u)) state.epgUrls.push(u);
-
-        let added;
-        if (mode === 'replace') {
-            state.channels = channels;
-            state.selectedIds.clear();
-            state.selectedGroup = '__all__';
-            added = channels.length;
-        } else {
-            const known = new Set(state.channels.map(c => c.url));
-            added = 0;
-            for (const ch of channels) {
-                if (known.has(ch.url)) continue; // Duplikat
-                state.channels.push(ch);
-                known.add(ch.url);
-                added++;
-            }
-        }
-
-        setUrlImportLoading(false);
-        closeUrlModal();
-        render();
-
-        const skipped = channels.length - added;
-        showToast(mode === 'replace'
-            ? `Playlist geladen: ${added} Sender übernommen`
-            : `${added} Sender importiert` + (skipped > 0 ? `, ${skipped} Duplikate übersprungen` : ''),
-            'success');
-
-    } catch (err) {
-        if (err.name === 'AbortError') {
-            showUrlStatus('Abgebrochen oder Zeitüberschreitung nach 30&nbsp;Sekunden.', 'error');
-        } else if (err instanceof TypeError) { // „Failed to fetch" → meistens CORS
-            showUrlStatus(
-                'Direkter Zugriff fehlgeschlagen – der Server blockiert vermutlich Browser-Anfragen (CORS). ' +
-                '<button type="button" class="btn btn-sm btn-primary mt-2" onclick="retryUrlImportWithProxy()">Mit Proxy erneut versuchen</button>',
-                'error');
-        } else {
-            showUrlStatus(err.message || 'Unbekannter Fehler beim Import.', 'error');
-        }
-    } finally {
-        clearTimeout(timer);
-        urlImportAbort = null;
-        setUrlImportLoading(false);
-    }
-}
-
-function retryUrlImportWithProxy() {
-    if (!lastUrlImport || urlImportBusy) return;
-    document.getElementById('urlProxyToggle').classList.add('on');
-    doUrlImport(lastUrlImport.url, lastUrlImport.mode);
-}
-
-    /* ========================================================
-       GRUPPEN AKTIONEN
-    ======================================================== */
-    function selectGroup(g){state.selectedGroup=g;state.selectedIds.clear();render();}
-    function addGroup(){state.editGroupMode='create';state.editGroupOldName='';document.getElementById('groupModalTitle').textContent='Gruppe erstellen';document.getElementById('groupModalInput').value='';document.getElementById('groupModal').classList.remove('hidden');document.getElementById('groupModal').classList.add('flex');setTimeout(()=>document.getElementById('groupModalInput').focus(),10);}
-    function renameGroup(g){state.editGroupMode='rename';state.editGroupOldName=g;document.getElementById('groupModalTitle').textContent='Gruppe umbenennen';document.getElementById('groupModalInput').value=g;document.getElementById('groupModal').classList.remove('hidden');document.getElementById('groupModal').classList.add('flex');setTimeout(()=>document.getElementById('groupModalInput').focus(),10);}
-    function closeGroupModal(){document.getElementById('groupModal').classList.add('hidden');document.getElementById('groupModal').classList.remove('flex');}
-    function saveGroup(){const v=document.getElementById('groupModalInput').value.trim();if(!v){toast('Bitte Namen eingeben.','warning');return;}if(state.editGroupMode==='create'){if(getAllGroupNames().includes(v)){toast('Existiert bereits.','warning');return;}state.groupOrder.push(v);render();toast('Gruppe erstellt.','success');}else{const o=state.editGroupOldName;if(v===o){closeGroupModal();return;}if(getAllGroupNames().includes(v)){toast('Existiert bereits.','warning');return;}state.channels.forEach(c=>{if(c.group===o)c.group=v;});const idx=state.groupOrder.indexOf(o);if(idx!==-1)state.groupOrder[idx]=v;render();toast('Gruppe umbenannt.','success');}closeGroupModal();}
-
-    function deleteGroup(g){const cnt=state.channels.filter(c=>c.group===g).length;if(cnt===0){state.groupOrder=state.groupOrder.filter(x=>x!==g);render();return;}showConfirm('Gruppe löschen',`Möchtest du die Gruppe "${g}" wirklich löschen?`,`${cnt} Sender werden in "Ohne Gruppe" verschoben.`,()=>{state.channels.forEach(c=>{if(c.group===g)c.group='';});state.groupOrder=state.groupOrder.filter(x=>x!==g);if(state.selectedGroup===g)state.selectedGroup='__all__';render();toast('Gruppe gelöscht.','info');});}
-
-    function reorderGroup(from, to, before){
-        if (!state.groupOrder.includes(from)) state.groupOrder.push(from);
-        if (!state.groupOrder.includes(to)) state.groupOrder.push(to);
-
-        const fromIdx = state.groupOrder.indexOf(from);
-        state.groupOrder.splice(fromIdx, 1);
-
-        const toIdx = state.groupOrder.indexOf(to);
-        if (toIdx === -1) return;
-
-        state.groupOrder.splice(before ? toIdx : toIdx + 1, 0, from);
+    function selectGroup(group) {
+        state.selectedGroup = group;
         render();
     }
 
-    /* ========================================================
-       DRAG & DROP IN SIDEBAR
-    ======================================================== */
-    function sidebarGroupDragOver(e) {
-        e.preventDefault();
-        const types = Array.from(e.dataTransfer.types);
-        if (types.includes('application/x-m3u-channel')) {
-            e.dataTransfer.dropEffect = 'move';
-            e.currentTarget.classList.add('drag-over-group');
-        } else {
-            e.dataTransfer.dropEffect = 'none'; 
-            e.currentTarget.classList.remove('drag-over-group');
-        }
+    function addGroup() {
+        state.editGroupMode = 'create';
+        state.editGroupOldName = '';
+        document.getElementById('groupModalTitle').textContent = 'Gruppe erstellen';
+        document.getElementById('groupModalInput').value = '';
+        document.getElementById('groupModal').classList.remove('hidden');
+        document.getElementById('groupModal').classList.add('flex');
+        setTimeout(() => document.getElementById('groupModalInput').focus(), 100);
     }
-    function sidebarGroupDragLeave(e) { e.currentTarget.classList.remove('drag-over-group'); }
-    function sidebarGroupDrop(e, targetGroup) {
-        e.preventDefault();
-        e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom', 'drag-over-group');
+
+    function renameGroup(groupName) {
+        state.editGroupMode = 'rename';
+        state.editGroupOldName = groupName;
+        document.getElementById('groupModalTitle').textContent = 'Gruppe umbenennen';
+        document.getElementById('groupModalInput').value = groupName;
+        document.getElementById('groupModal').classList.remove('hidden');
+        document.getElementById('groupModal').classList.add('flex');
+        setTimeout(() => document.getElementById('groupModalInput').focus(), 100);
+    }
+
+    function deleteGroup(groupName) {
+        const count = state.channels.filter(c => c.group === groupName).length;
         
-        const chId = e.dataTransfer.getData('application/x-m3u-channel');
-        const grpFrom = e.dataTransfer.getData('application/x-m3u-group');
-        
-        if (grpFrom) {
-            if (grpFrom === targetGroup) return;
-            const before = e.clientY < e.currentTarget.getBoundingClientRect().top + e.currentTarget.getBoundingClientRect().height / 2;
-            reorderGroup(grpFrom, targetGroup, before);
-        } else if (chId) {
-            const ch = state.channels.find(c => c.id === chId);
-            if (!ch) return;
-            const newGroupName = targetGroup === '__ungrouped__' ? '' : targetGroup;
-            if (ch.group === newGroupName) { toast('Sender ist bereits in dieser Gruppe.', 'info'); return; }
-            ch.group = newGroupName;
+        if (count > 0) {
+            showConfirm(
+                'Gruppe löschen',
+                `Die Gruppe "${groupName}" enthält ${count} Sender. Was soll mit diesen Sendern geschehen?`,
+                `<div class="text-sm">
+                    <p class="text-gray-400">Die Sender werden der Gruppe "Ohne Gruppe" zugeordnet.</p>
+                </div>`,
+                () => {
+                    // Alle Sender dieser Gruppe auf "keine Gruppe" setzen
+                    state.channels.forEach(c => {
+                        if (c.group === groupName) c.group = '';
+                    });
+                    // Gruppe aus groupOrder entfernen
+                    state.groupOrder = state.groupOrder.filter(g => g !== groupName);
+                    // Falls die gelöschte Gruppe ausgewählt war, zurück zu "Alle"
+                    if (state.selectedGroup === groupName) state.selectedGroup = '__all__';
+                    render();
+                    showToast('Gruppe gelöscht', 'success');
+                }
+            );
+        } else {
+            // Keine Sender in dieser Gruppe - direkt löschen
+            state.groupOrder = state.groupOrder.filter(g => g !== groupName);
+            if (state.selectedGroup === groupName) state.selectedGroup = '__all__';
             render();
-            toast(`Sender "${ch.name}" verschoben.`, 'success');
+            showToast('Gruppe gelöscht', 'success');
         }
     }
 
-    /* ========================================================
-       SENDER AKTIONEN
-    ======================================================== */
-    function addChannel(){const id=genId();state.channels.push({id,name:'Neuer Sender',url:'',radio:false,tvg:{id:'',name:'',logo:'',language:'',country:'',url:'',shift:'',chno:'',rec:'',guide:'',source:'',genre:''},group:state.selectedGroup!=='__all__'&&state.selectedGroup!=='__tv__'&&state.selectedGroup!=='__radio__'&&state.selectedGroup!=='__ungrouped__'?state.selectedGroup:''});editChannel(id);}
-    function editChannel(id){state.editChannelId=id;const ch=state.channels.find(c=>c.id===id);if(!ch)return;state.editRadio=isRadio(ch);document.getElementById('editModalTitle').textContent='Sender bearbeiten';document.getElementById('editName').value=ch.name;document.getElementById('editUrl').value=ch.url;document.getElementById('editLogo').value=ch.tvg.logo||'';document.getElementById('editTvgId').value=ch.tvg.id||'';document.getElementById('editTvgName').value=ch.tvg.name||'';document.getElementById('editTvgLanguage').value=ch.tvg.language||'';document.getElementById('editTvgCountry').value=ch.tvg.country||'';document.getElementById('editTvgGenre').value=ch.tvg.genre||'';document.getElementById('editTvgChno').value=ch.tvg.chno||'';document.getElementById('editTvgShift').value=ch.tvg.shift||'';document.getElementById('editTvgUrl').value=ch.tvg.url||'';document.getElementById('editTvgGuide').value=ch.tvg.guide||'';document.getElementById('editTvgSource').value=ch.tvg.source||'';document.getElementById('editTvgRec').checked=ch.tvg.rec==='true'||ch.tvg.rec==='1';updateRadioToggle();updateLogoPreview();const sel=document.getElementById('editGroup');sel.innerHTML='<option value="">-- keine Gruppe --</option>';for(const g of getAllGroupNames())sel.innerHTML+=`<option value="${escAttr(g)}">${escHtml(g)}</option>`;sel.innerHTML+='<option value="__new__">+ Neue Gruppe...</option>';sel.value=ch.group||'';document.getElementById('editNewGroup').value='';document.getElementById('editNewGroup').classList.add('hidden');document.getElementById('editModal').classList.remove('hidden');document.getElementById('editModal').classList.add('flex');}
-    function closeEditModal(){document.getElementById('editModal').classList.add('hidden');document.getElementById('editModal').classList.remove('flex');}
-    function saveChannel(){const ch=state.channels.find(c=>c.id===state.editChannelId);if(!ch)return;ch.name=document.getElementById('editName').value.trim()||'Unbenannt';ch.url=document.getElementById('editUrl').value.trim();ch.tvg.logo=document.getElementById('editLogo').value.trim();ch.tvg.id=document.getElementById('editTvgId').value.trim();ch.tvg.name=document.getElementById('editTvgName').value.trim();ch.tvg.language=document.getElementById('editTvgLanguage').value.trim();ch.tvg.country=document.getElementById('editTvgCountry').value.trim();ch.tvg.genre=document.getElementById('editTvgGenre').value.trim();ch.tvg.chno=document.getElementById('editTvgChno').value.trim();ch.tvg.shift=document.getElementById('editTvgShift').value.trim();ch.tvg.url=document.getElementById('editTvgUrl').value.trim();ch.tvg.guide=document.getElementById('editTvgGuide').value.trim();ch.tvg.source=document.getElementById('editTvgSource').value.trim();ch.tvg.rec=document.getElementById('editTvgRec').checked?'true':'';ch.radio=state.editRadio;const gSel=document.getElementById('editGroup'),gNew=document.getElementById('editNewGroup');if(gSel.value==='__new__'){ch.group=gNew.value.trim();if(ch.group&&!getAllGroupNames().includes(ch.group))state.groupOrder.push(ch.group);}else{ch.group=gSel.value;}closeEditModal();render();toast('Sender gespeichert.','success');}
-
-    function toggleRadioEdit(){state.editRadio=!state.editRadio;updateRadioToggle();}
-    function updateRadioToggle(){const t=document.getElementById('radioToggle'),l=document.getElementById('radioToggleLabel');if(state.editRadio){t.classList.add('on');l.textContent='Radio-Sender';}else{t.classList.remove('on');l.textContent='TV-Sender';}}
-    function updateLogoPreview(){const url=document.getElementById('editLogo').value.trim(),img=document.getElementById('editLogoPreview');if(url){img.src=url;img.classList.remove('hidden');}else{img.classList.add('hidden');img.src='';}}
-    function toggleNewGroupInput(){const sel=document.getElementById('editGroup'),inp=document.getElementById('editNewGroup');if(sel.value==='__new__'){inp.classList.remove('hidden');inp.focus();}else{inp.classList.add('hidden');}}
-
-    function deleteChannel(id){const ch=state.channels.find(c=>c.id===id);if(!ch)return;showConfirm('Sender löschen',`Möchtest du "${ch.name}" wirklich löschen?`,null,()=>{state.channels=state.channels.filter(c=>c.id!==id);state.selectedIds.delete(id);render();toast('Sender gelöscht.','info');});}
-    function duplicateChannel(id){const ch=state.channels.find(c=>c.id===id);if(!ch)return;const copy={...ch,id:genId(),name:ch.name+' (Kopie)',tvg:{...ch.tvg}};const idx=state.channels.indexOf(ch);state.channels.splice(idx+1,0,copy);render();toast('Sender dupliziert.','success');}
-    function moveChannel(id,dir){const idx=state.channels.findIndex(c=>c.id===id);if(idx===-1)return;const nIdx=idx+dir;if(nIdx<0||nIdx>=state.channels.length)return;[state.channels[idx],state.channels[nIdx]]=[state.channels[nIdx],state.channels[idx]];render();}
-
-    /* ========================================================
-       AUSWAHL & BATCH
-    ======================================================== */
-    function toggleSelect(id){if(state.selectedIds.has(id))state.selectedIds.delete(id);else state.selectedIds.add(id);render();}
-    function toggleSelectAll(){const list=getFilteredChannels();if(state.selectedIds.size===list.length&&list.length>0)state.selectedIds.clear();else list.forEach(c=>state.selectedIds.add(c.id));render();}
-    function batchSetGroup(){const g=document.getElementById('batchGroup').value;if(!g)return;if(g==='__new__'){const ng=prompt('Neue Gruppenname:');if(!ng)return;state.selectedIds.forEach(id=>{const ch=state.channels.find(c=>c.id===id);if(ch)ch.group=ng;});if(!getAllGroupNames().includes(ng))state.groupOrder.push(ng);}else{state.selectedIds.forEach(id=>{const ch=state.channels.find(c=>c.id===id);if(ch)ch.group=g;});}state.selectedIds.clear();render();toast('Gruppe zugewiesen.','success');}
-    function batchToggleRadio(){state.selectedIds.forEach(id=>{const ch=state.channels.find(c=>c.id===id);if(ch)ch.radio=!isRadio(ch);});render();toast('Radio-Flag umgeschaltet.','success');}
-    function batchDelete(){const cnt=state.selectedIds.size;if(cnt===0)return;showConfirm('Ausgewählte löschen',`Möchtest du ${cnt} Sender wirklich löschen?`,null,()=>{state.channels=state.channels.filter(c=>!state.selectedIds.has(c.id));state.selectedIds.clear();render();toast('Sender gelöscht.','info');});}
-
-    /* ========================================================
-       DRAG & DROP (Sender untereinander sortieren)
-    ======================================================== */
-    function channelDragStart(e,id){
-        e.dataTransfer.setData('application/x-m3u-channel', id);
-        e.dataTransfer.effectAllowed='move';
-        e.target.classList.add('dragging');
-        state.dragSrcId=id;
+    function saveGroup() {
+        const name = document.getElementById('groupModalInput').value.trim();
+        if (!name) {
+            showToast('Bitte einen Gruppennamen eingeben', 'error');
+            return;
+        }
+        
+        if (state.editGroupMode === 'create') {
+            if (!state.groupOrder.includes(name)) {
+                state.groupOrder.push(name);
+                showToast(`Gruppe "${name}" erstellt`, 'success');
+            } else {
+                showToast('Gruppe existiert bereits', 'error');
+                return;
+            }
+        } else if (state.editGroupMode === 'rename') {
+            const oldName = state.editGroupOldName;
+            if (name !== oldName) {
+                // Alle Sender umbenennen
+                state.channels.forEach(c => {
+                    if (c.group === oldName) c.group = name;
+                });
+                // groupOrder aktualisieren
+                state.groupOrder = state.groupOrder.map(g => g === oldName ? name : g);
+                // Falls ausgewählte Gruppe umbenannt wurde
+                if (state.selectedGroup === oldName) state.selectedGroup = name;
+                showToast(`Gruppe umbenannt zu "${name}"`, 'success');
+            }
+        }
+        
+        closeGroupModal();
+        render();
     }
-    function channelDragEnd(e){e.target.classList.remove('dragging');state.dragSrcId=null;document.querySelectorAll('.channel-row,.channel-card').forEach(el=>el.classList.remove('drag-over-top','drag-over-bottom'));}
-    function channelDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move';const r=e.currentTarget.getBoundingClientRect();e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');if(e.clientY<r.top+r.height/2)e.currentTarget.classList.add('drag-over-top');else e.currentTarget.classList.add('drag-over-bottom');}
-    function channelDragLeave(e){e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');}
-    function channelDrop(e,targetId){
-        e.preventDefault();
-        e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');
-        const srcId = e.dataTransfer.getData('application/x-m3u-channel');
-        if(!srcId) return; 
+
+    function closeGroupModal() {
+        document.getElementById('groupModal').classList.add('hidden');
+        document.getElementById('groupModal').classList.remove('flex');
+    }
+
+    /* ========================================================
+       KANAL-AKTIONEN
+    ======================================================== */
+    function addChannel() {
+        state.editChannelId = null;
+        state.editRadio = false;
         
-        if(srcId===targetId)return;
-        const srcIdx=state.channels.findIndex(c=>c.id===srcId),targetIdx=state.channels.findIndex(c=>c.id===targetId);
-        if(srcIdx===-1||targetIdx===-1)return;
+        // Modal-Felder zurücksetzen
+        document.getElementById('editModalTitle').textContent = 'Neuer Sender';
+        document.getElementById('editName').value = '';
+        document.getElementById('editUrl').value = '';
+        document.getElementById('editLogo').value = '';
+        document.getElementById('editLogoPreview').classList.add('hidden');
+        document.getElementById('editTvgId').value = '';
+        document.getElementById('editTvgName').value = '';
+        document.getElementById('editTvgLanguage').value = '';
+        document.getElementById('editTvgCountry').value = '';
+        document.getElementById('editTvgGenre').value = '';
+        document.getElementById('editTvgChno').value = '';
+        document.getElementById('editTvgShift').value = '';
+        document.getElementById('editTvgUrl').value = '';
+        document.getElementById('editTvgGuide').value = '';
+        document.getElementById('editTvgSource').value = '';
+        document.getElementById('editTvgRec').checked = false;
+        document.getElementById('editNewGroup').classList.add('hidden');
         
-        const[src]=state.channels.splice(srcIdx,1);
-        const newTargetIdx=state.channels.findIndex(c=>c.id===targetId);
-        const before=e.clientY<e.currentTarget.getBoundingClientRect().top+e.currentTarget.getBoundingClientRect().height/2;
-        state.channels.splice(before?newTargetIdx:newTargetIdx+1,0,src);
+        // Gruppen-Dropdown füllen
+        updateGroupDropdown('');
+        
+        // Radio-Toggle zurücksetzen
+        document.getElementById('radioToggle').classList.remove('on');
+        document.getElementById('radioToggleLabel').textContent = 'TV-Sender';
+        
+        document.getElementById('editModal').classList.remove('hidden');
+        document.getElementById('editModal').classList.add('flex');
+        setTimeout(() => document.getElementById('editName').focus(), 100);
+    }
+
+    function editChannel(id) {
+        const ch = state.channels.find(c => c.id === id);
+        if (!ch) return;
+        
+        state.editChannelId = id;
+        state.editRadio = isRadio(ch);
+        
+        document.getElementById('editModalTitle').textContent = 'Sender bearbeiten';
+        document.getElementById('editName').value = ch.name || '';
+        document.getElementById('editUrl').value = ch.url || '';
+        document.getElementById('editLogo').value = ch.tvg.logo || '';
+        document.getElementById('editTvgId').value = ch.tvg.id || '';
+        document.getElementById('editTvgName').value = ch.tvg.name || '';
+        document.getElementById('editTvgLanguage').value = ch.tvg.language || '';
+        document.getElementById('editTvgCountry').value = ch.tvg.country || '';
+        document.getElementById('editTvgGenre').value = ch.tvg.genre || '';
+        document.getElementById('editTvgChno').value = ch.tvg.chno || '';
+        document.getElementById('editTvgShift').value = ch.tvg.shift || '';
+        document.getElementById('editTvgUrl').value = ch.tvg.url || '';
+        document.getElementById('editTvgGuide').value = ch.tvg.guide || '';
+        document.getElementById('editTvgSource').value = ch.tvg.source || '';
+        document.getElementById('editTvgRec').checked = ch.tvg.rec === 'true' || ch.tvg.rec === true;
+        document.getElementById('editNewGroup').classList.add('hidden');
+        
+        // Logo-Preview aktualisieren
+        if (ch.tvg.logo) {
+            document.getElementById('editLogoPreview').src = ch.tvg.logo;
+            document.getElementById('editLogoPreview').classList.remove('hidden');
+        } else {
+            document.getElementById('editLogoPreview').classList.add('hidden');
+        }
+        
+        // Gruppen-Dropdown füllen
+        updateGroupDropdown(ch.group || '');
+        
+        // Radio-Toggle setzen
+        if (isRadio(ch)) {
+            document.getElementById('radioToggle').classList.add('on');
+            document.getElementById('radioToggleLabel').textContent = 'Radio-Sender';
+        } else {
+            document.getElementById('radioToggle').classList.remove('on');
+            document.getElementById('radioToggleLabel').textContent = 'TV-Sender';
+        }
+        
+        document.getElementById('editModal').classList.remove('hidden');
+        document.getElementById('editModal').classList.add('flex');
+    }
+
+    function updateGroupDropdown(selectedValue) {
+        const select = document.getElementById('editGroup');
+        select.innerHTML = '<option value="">-- keine Gruppe --</option>';
+        
+        // Option für "Neue Gruppe..." hinzufügen
+        select.innerHTML += '<option value="__new__">+ Neue Gruppe...</option>';
+        
+        const groups = getAllGroupNames();
+        for (const g of groups) {
+            select.innerHTML += `<option value="${escAttr(g)}" ${g === selectedValue ? 'selected' : ''}>${escHtml(g)}</option>`;
+        }
+        
+        if (selectedValue && !groups.includes(selectedValue)) {
+            // Gruppe existiert nicht mehr - als Option hinzufügen
+            select.innerHTML += `<option value="${escAttr(selectedValue)}" selected>${escHtml(selectedValue)}</option>`;
+        }
+    }
+
+    function toggleNewGroupInput() {
+        const select = document.getElementById('editGroup');
+        const input = document.getElementById('editNewGroup');
+        
+        if (select.value === '__new__') {
+            input.classList.remove('hidden');
+            input.focus();
+        } else {
+            input.classList.add('hidden');
+            input.value = '';
+        }
+    }
+
+    function toggleRadioEdit() {
+        state.editRadio = !state.editRadio;
+        const toggle = document.getElementById('radioToggle');
+        const label = document.getElementById('radioToggleLabel');
+        
+        if (state.editRadio) {
+            toggle.classList.add('on');
+            label.textContent = 'Radio-Sender';
+        } else {
+            toggle.classList.remove('on');
+            label.textContent = 'TV-Sender';
+        }
+    }
+
+    function updateLogoPreview() {
+        const url = document.getElementById('editLogo').value.trim();
+        const preview = document.getElementById('editLogoPreview');
+        
+        if (url) {
+            preview.src = url;
+            preview.classList.remove('hidden');
+            preview.onerror = function() {
+                this.classList.add('hidden');
+            };
+        } else {
+            preview.classList.add('hidden');
+        }
+    }
+
+    function saveChannel() {
+        const name = document.getElementById('editName').value.trim();
+        const url = document.getElementById('editUrl').value.trim();
+        
+        if (!name) {
+            showToast('Bitte einen Sendernamen eingeben', 'error');
+            return;
+        }
+        
+        if (!url) {
+            showToast('Bitte eine Stream-URL eingeben', 'error');
+            return;
+        }
+        
+        // Gruppe ermitteln
+        let group = '';
+        const groupSelect = document.getElementById('editGroup');
+        const groupInput = document.getElementById('editNewGroup');
+        
+        if (groupSelect.value === '__new__' && !groupInput.classList.contains('hidden')) {
+            group = groupInput.value.trim();
+            if (group && !state.groupOrder.includes(group)) {
+                state.groupOrder.push(group);
+            }
+        } else {
+            group = groupSelect.value;
+        }
+        
+        const channelData = {
+            name: name,
+            url: url,
+            radio: state.editRadio,
+            group: group,
+            tvg: {
+                id: document.getElementById('editTvgId').value.trim(),
+                name: document.getElementById('editTvgName').value.trim(),
+                logo: document.getElementById('editLogo').value.trim(),
+                language: document.getElementById('editTvgLanguage').value.trim(),
+                country: document.getElementById('editTvgCountry').value.trim(),
+                genre: document.getElementById('editTvgGenre').value.trim(),
+                chno: document.getElementById('editTvgChno').value.trim(),
+                shift: document.getElementById('editTvgShift').value.trim(),
+                url: document.getElementById('editTvgUrl').value.trim(),
+                guide: document.getElementById('editTvgGuide').value.trim(),
+                source: document.getElementById('editTvgSource').value.trim(),
+                rec: document.getElementById('editTvgRec').checked ? 'true' : ''
+            }
+        };
+        
+        if (state.editChannelId) {
+            // Bestehenden Kanal aktualisieren
+            const idx = state.channels.findIndex(c => c.id === state.editChannelId);
+            if (idx !== -1) {
+                state.channels[idx] = { ...state.channels[idx], ...channelData };
+            }
+            showToast('Sender aktualisiert', 'success');
+        } else {
+            // Neuen Kanal hinzufügen
+            const newChannel = { id: genId(), ...channelData };
+            state.channels.push(newChannel);
+            showToast('Sender hinzugefügt', 'success');
+        }
+        
+        closeEditModal();
+        render();
+    }
+
+    function closeEditModal() {
+        document.getElementById('editModal').classList.add('hidden');
+        document.getElementById('editModal').classList.remove('flex');
+        state.editChannelId = null;
+    }
+
+    function deleteChannel(id) {
+        const ch = state.channels.find(c => c.id === id);
+        if (!ch) return;
+        
+        showConfirm(
+            'Sender löschen',
+            `Möchtest du "${escHtml(ch.name)}" wirklich löschen?`,
+            null,
+            () => {
+                state.channels = state.channels.filter(c => c.id !== id);
+                state.selectedIds.delete(id);
+                render();
+                showToast('Sender gelöscht', 'success');
+            }
+        );
+    }
+
+    function duplicateChannel(id) {
+        const ch = state.channels.find(c => c.id === id);
+        if (!ch) return;
+        
+        const copy = { ...JSON.parse(JSON.stringify(ch)), id: genId(), name: ch.name + ' (Kopie)' };
+        const idx = state.channels.findIndex(c => c.id === id);
+        state.channels.splice(idx + 1, 0, copy);
+        render();
+        showToast('Sender dupliziert', 'success');
+    }
+
+    function moveChannel(id, direction) {
+        const idx = state.channels.findIndex(c => c.id === id);
+        if (idx === -1) return;
+        
+        const newIdx = idx + direction;
+        if (newIdx < 0 || newIdx >= state.channels.length) return;
+        
+        const channel = state.channels[idx];
+        state.channels.splice(idx, 1);
+        state.channels.splice(newIdx, 0, channel);
+        
+        // Kanal im Viewport scrollen
+        setTimeout(() => {
+            const el = document.querySelector(`[data-id="${id}"]`);
+            if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }, 50);
+        
+        render();
+    }
+
+    function toggleSelect(id) {
+        if (state.selectedIds.has(id)) {
+            state.selectedIds.delete(id);
+        } else {
+            state.selectedIds.add(id);
+        }
+        updateBatchBar();
+        // Nur die betroffene Zeile/Karte aktualisieren (Performance-Optimierung)
+        const el = document.querySelector(`[data-id="${id}"]`);
+        if (el) {
+            const isChecked = state.selectedIds.has(id);
+            el.classList.toggle('selected', isChecked);
+            const check = el.querySelector('.custom-check');
+            if (check) check.classList.toggle('checked', isChecked);
+        }
+    }
+
+    function toggleSelectAll() {
+        const list = getFilteredChannels();
+        if (state.selectedIds.size === list.length) {
+            state.selectedIds.clear();
+        } else {
+            state.selectedIds = new Set(list.map(c => c.id));
+        }
         render();
     }
 
     /* ========================================================
-       DATEI IMPORT / EXPORT
+       BATCH-AKTIONEN
     ======================================================== */
-    function importFile(){document.getElementById('fileInput').click();}
-    function handleFileSelect(e){const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=(ev)=>{const text=ev.target.result;const{channels,epgUrls}=parseM3U(text);state.channels=channels;state.epgUrls=epgUrls;state.selectedIds.clear();render();toast(`Importiert: ${channels.length} Sender`,'success');};reader.readAsText(file,"UTF-8");e.target.value='';}
-    
-    function exportFile(){
-        // Füge UTF-8 BOM hinzu (Byte Order Mark) für maximale Kompatibilität
-        const text = '\uFEFF' + generateM3U();
-        // Exportiere als M3U8 mit explizitem UTF-8 Charset
-        const blob = new Blob([text], {type: 'audio/x-mpegurl;charset=UTF-8'});
+    function batchSetGroup() {
+        const group = document.getElementById('batchGroup').value;
+        if (!group) {
+            showToast('Bitte eine Gruppe auswählen', 'error');
+            return;
+        }
+        
+        let count = 0;
+        for (const id of state.selectedIds) {
+            const ch = state.channels.find(c => c.id === id);
+            if (ch) {
+                ch.group = group;
+                count++;
+            }
+        }
+        
+        state.selectedIds.clear();
+        render();
+        showToast(`${count} Sender der Gruppe "${group}" zugewiesen`, 'success');
+    }
+
+    function batchToggleRadio() {
+        let count = 0;
+        for (const id of state.selectedIds) {
+            const ch = state.channels.find(c => c.id === id);
+            if (ch) {
+                ch.radio = !isRadio(ch);
+                count++;
+            }
+        }
+        
+        render();
+        showToast(`Radio-Flag für ${count} Sender umgeschaltet`, 'success');
+    }
+
+    function batchDelete() {
+        const count = state.selectedIds.size;
+        if (count === 0) return;
+        
+        showConfirm(
+            'Sender löschen',
+            `Möchtest du ${count} ausgewählte Sender wirklich löschen?`,
+            null,
+            () => {
+                state.channels = state.channels.filter(c => !state.selectedIds.has(c.id));
+                state.selectedIds.clear();
+                render();
+                showToast(`${count} Sender gelöscht`, 'success');
+            }
+        );
+    }
+
+    /* ========================================================
+       DATEI-IMPORT/EXPORT
+    ======================================================== */
+    function importFile() {
+        document.getElementById('fileInput').click();
+    }
+
+    function handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        // FIX: Dateigrößen-Prüfung (max. 10MB)
+        if (file.size > 10 * 1024 * 1024) {
+            showToast('Datei zu groß (max. 10MB)', 'error');
+            event.target.value = '';
+            return;
+        }
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const text = e.target.result;
+                const result = parseM3U(text);
+                
+                if (result.channels.length === 0) {
+                    showToast('Keine Sender in der Datei gefunden', 'error');
+                    return;
+                }
+                
+                // Bestehende Sender ersetzen oder zusammenführen
+                if (state.channels.length > 0) {
+                    showConfirm(
+                        'Import-Modus',
+                        `${result.channels.length} Sender gefunden. Wie soll importiert werden?`,
+                        `<div class="text-sm">
+                            <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                                <input type="radio" name="importMode" value="merge" checked class="accent-accent">
+                                <span>Zusammenführen (Duplikate überspringen)</span>
+                            </label>
+                            <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                                <input type="radio" name="importMode" value="replace" class="accent-accent">
+                                <span>Ersetzen (alle bestehenden löschen)</span>
+                            </label>
+                        </div>`,
+                        () => {
+                            const mode = document.querySelector('input[name="importMode"]:checked')?.value || 'merge';
+                            
+                            if (mode === 'replace') {
+                                state.channels = result.channels;
+                            } else {
+                                // Merge: Duplikate anhand URL überspringen
+                                const existingUrls = new Set(state.channels.map(c => c.url));
+                                for (const ch of result.channels) {
+                                    if (!existingUrls.has(ch.url)) {
+                                        state.channels.push(ch);
+                                        existingUrls.add(ch.url);
+                                    }
+                                }
+                            }
+                            
+                            // EPG-URLs zusammenführen
+                            for (const epgUrl of result.epgUrls) {
+                                if (!state.epgUrls.includes(epgUrl)) {
+                                    state.epgUrls.push(epgUrl);
+                                }
+                            }
+                            
+                            render();
+                            showToast(`${result.channels.length} Sender importiert`, 'success');
+                        }
+                    );
+                } else {
+                    // Erster Import - direkt laden
+                    state.channels = result.channels;
+                    state.epgUrls = result.epgUrls;
+                    render();
+                    showToast(`${result.channels.length} Sender importiert`, 'success');
+                }
+                
+            } catch (err) {
+                console.error('Import-Fehler:', err);
+                showToast('Fehler beim Importieren der Datei', 'error');
+            }
+        };
+        
+        reader.readAsText(file);
+        event.target.value = ''; // Reset für erneute Auswahl derselben Datei
+    }
+
+    function exportFile() {
+        if (state.channels.length === 0) {
+            showToast('Keine Sender zum Exportieren vorhanden', 'error');
+            return;
+        }
+        
+        const m3uContent = generateM3U();
+        const blob = new Blob([m3uContent], { type: 'audio/x-mpegurl' });
         const url = URL.createObjectURL(blob);
+        
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'playlist.m3u8';
+        a.download = 'playlist.m3u';
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        toast('Erfolgreich als M3U8 (UTF-8) exportiert!','success');
+        
+        showToast('M3U-Datei exportiert', 'success');
     }
 
     /* ========================================================
-       HILFSFUNKTIONEN
+       URL-IMPORT
     ======================================================== */
-    function escHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-    function escAttr(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function openUrlModal() {
+        document.getElementById('urlModal').classList.remove('hidden');
+        document.getElementById('urlModal').classList.add('flex');
+        setTimeout(() => document.getElementById('urlImportInput').focus(), 100);
+    }
 
-    function setView(mode){state.viewMode=mode;document.getElementById('viewTable').className=`px-3 py-1 text-xs ${mode==='table'?'bg-accent text-bg':'text-gray-500 hover:text-gray-300'}`;document.getElementById('viewCards').className=`px-3 py-1 text-xs ${mode==='cards'?'bg-accent text-bg':'text-gray-500 hover:text-gray-300'}`;render();}
-    function applySort(){state.sortOrder=document.getElementById('sortSelect').value;render();}
+    function closeUrlModal() {
+        document.getElementById('urlModal').classList.add('hidden');
+        document.getElementById('urlModal').classList.remove('flex');
+        document.getElementById('urlImportStatus').classList.add('hidden');
+    }
+
+    let useUrlProxy = false;
+    function toggleUrlProxy() {
+        useUrlProxy = !useUrlProxy;
+        const toggle = document.getElementById('urlProxyToggle');
+        if (useUrlProxy) toggle.classList.add('on');
+        else toggle.classList.remove('on');
+    }
+
+    function importFromUrl() {
+        const url = document.getElementById('urlImportInput').value.trim();
+        if (!url) {
+            showToast('Bitte eine URL eingeben', 'error');
+            return;
+        }
+        
+        // FIX: URL-Validierung
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            showToast('URL muss mit http:// oder https:// beginnen', 'error');
+            return;
+        }
+        
+        const btn = document.getElementById('urlImportBtn');
+        const status = document.getElementById('urlImportStatus');
+        
+        // Loading-State
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Lädt...';
+        status.classList.remove('hidden');
+        status.innerHTML = '<div class="flex items-center gap-2 text-sm text-gray-400"><i class="fa-solid fa-spinner fa-spin"></i> Playlist wird geladen...</div>';
+        
+        // CORS-Proxy wenn aktiviert
+        let fetchUrl = url;
+        if (useUrlProxy) {
+            fetchUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+        }
+        
+        fetch(fetchUrl)
+            .then(response => {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.text();
+            })
+            .then(text => {
+                const result = parseM3U(text);
+                
+                if (result.channels.length === 0) {
+                    throw new Error('Keine Sender gefunden');
+                }
+                
+                const mode = document.querySelector('input[name="urlImportMode"]:checked')?.value || 'merge';
+                
+                if (mode === 'replace' && state.channels.length > 0) {
+                    showConfirm(
+                        'Sender ersetzen',
+                        `${result.channels.length} Sender gefunden. Alle bestehenden ${state.channels.length} Sender ersetzen?`,
+                        null,
+                        () => {
+                            state.channels = result.channels;
+                            state.epgUrls = result.epgUrls;
+                            render();
+                            closeUrlModal();
+                            showToast(`${result.channels.length} Sender importiert`, 'success');
+                        }
+                    );
+                } else {
+                    // Merge
+                    const existingUrls = new Set(state.channels.map(c => c.url));
+                    let added = 0;
+                    for (const ch of result.channels) {
+                        if (!existingUrls.has(ch.url)) {
+                            state.channels.push(ch);
+                            existingUrls.add(ch.url);
+                            added++;
+                        }
+                    }
+                    
+                    for (const epgUrl of result.epgUrls) {
+                        if (!state.epgUrls.includes(epgUrl)) {
+                            state.epgUrls.push(epgUrl);
+                        }
+                    }
+                    
+                    render();
+                    closeUrlModal();
+                    showToast(`${added} neue Sender hinzugefügt (${result.channels.length - added} Duplikate übersprungen)`, 'success');
+                }
+            })
+            .catch(err => {
+                console.error('URL-Import-Fehler:', err);
+                status.innerHTML = `<div class="flex items-center gap-2 text-sm text-danger">
+                    <i class="fa-solid fa-circle-exclamation"></i> 
+                    Fehler: ${escHtml(err.message)}
+                    ${!useUrlProxy ? '<br><span class="text-xs text-gray-500">Tipp: CORS-Proxy aktivieren, falls der Anbieter Browser-Zugriffe blockiert.</span>' : ''}
+                </div>`;
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-cloud-arrow-down"></i> Importieren';
+            });
+    }
 
     /* ========================================================
-       TOAST BENACHRICHTIGUNGEN
+       EPG-MODAL
     ======================================================== */
-    function toast(msg,type='info'){const container=document.getElementById('toastContainer');const el=document.createElement('div');const colors={success:'border-green-500/50 bg-green-500/10',warning:'border-yellow-500/50 bg-yellow-500/10',info:'border-cyan-500/50 bg-cyan-500/10',error:'border-red-500/50 bg-red-500/10'};const icons={success:'fa-circle-check text-green-400',warning:'fa-triangle-exclamation text-yellow-400',info:'fa-circle-info text-cyan-400',error:'fa-circle-xmark text-red-400'};el.className=`toast-enter flex items-center gap-3 px-4 py-3 rounded-xl border ${colors[type]||colors.info} backdrop-blur-md shadow-lg`;el.innerHTML=`<i class="fa-solid ${icons[type]||icons.info}"></i><span class="text-sm text-gray-200">${msg}</span>`;container.appendChild(el);setTimeout(()=>{el.classList.remove('toast-enter');el.classList.add('toast-exit');setTimeout(()=>el.remove(),300);},3000);}
+    function openEpgModal() {
+        renderEpgList();
+        document.getElementById('epgModal').classList.remove('hidden');
+        document.getElementById('epgModal').classList.add('flex');
+    }
+
+    function closeEpgModal() {
+        document.getElementById('epgModal').classList.add('hidden');
+        document.getElementById('epgModal').classList.remove('flex');
+    }
+
+    function renderEpgList() {
+        const container = document.getElementById('epgUrlList');
+        container.innerHTML = '';
+        
+        if (state.epgUrls.length === 0) {
+            container.innerHTML = '<p class="text-sm text-gray-500 text-center py-4">Keine EPG-URLs vorhanden</p>';
+            return;
+        }
+        
+        for (let i = 0; i < state.epgUrls.length; i++) {
+            const url = state.epgUrls[i];
+            const row = document.createElement('div');
+            row.className = 'epg-url-row';
+            
+            // FIX: Sicherer HTML-Inhalt
+            row.innerHTML = `
+                <i class="fa-solid fa-link text-xs text-gray-500"></i>
+                <span class="flex-1 text-xs font-mono truncate">${escHtml(url)}</span>
+                <button class="btn btn-icon btn-danger" style="width:24px;height:24px;padding:0;" title="Löschen" data-index="${i}">
+                    <i class="fa-solid fa-trash text-[10px]"></i>
+                </button>
+            `;
+            
+            // FIX: Event-Listener statt Inline-Handler
+            const deleteBtn = row.querySelector('button');
+            deleteBtn.addEventListener('click', () => {
+                state.epgUrls.splice(i, 1);
+                renderEpgList();
+                updateEpgIndicator();
+                saveToLocalStorage();
+                showToast('EPG-URL gelöscht', 'success');
+            });
+            
+            container.appendChild(row);
+        }
+    }
+
+    function addEpgUrl() {
+        const input = document.getElementById('newEpgUrl');
+        const url = input.value.trim();
+        
+        if (!url) {
+            showToast('Bitte eine URL eingeben', 'error');
+            return;
+        }
+        
+        // FIX: URL-Validierung
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            showToast('URL muss mit http:// oder https:// beginnen', 'error');
+            return;
+        }
+        
+        if (state.epgUrls.includes(url)) {
+            showToast('URL existiert bereits', 'error');
+            return;
+        }
+        
+        state.epgUrls.push(url);
+        input.value = '';
+        renderEpgList();
+        updateEpgIndicator();
+        saveToLocalStorage();
+        showToast('EPG-URL hinzugefügt', 'success');
+    }
 
     /* ========================================================
-       LOCAL STORAGE
+       DRAG & DROP
     ======================================================== */
-    function saveToLocalStorage(){try{localStorage.setItem('m3u_editor_state',JSON.stringify({channels:state.channels,epgUrls:state.epgUrls,groupOrder:state.groupOrder}));}catch(e){}}
-    function loadFromLocalStorage(){try{const d=JSON.parse(localStorage.getItem('m3u_editor_state'));if(d){state.channels=d.channels||[];state.epgUrls=d.epgUrls||[];state.groupOrder=d.groupOrder||[];}}catch(e){}}
+    function channelDragStart(event, id) {
+        event.dataTransfer.setData('application/x-m3u-channel', id);
+        event.dataTransfer.effectAllowed = 'move';
+        state.dragSrcId = id;
+        event.target.classList.add('dragging');
+    }
+
+    function channelDragEnd(event) {
+        event.target.classList.remove('dragging');
+        state.dragSrcId = null;
+        // Alle Drag-Over-Klassen entfernen
+        document.querySelectorAll('.drag-over-top, .drag-over-bottom, .drag-over-group').forEach(el => {
+            el.classList.remove('drag-over-top', 'drag-over-bottom', 'drag-over-group');
+        });
+    }
+
+    function channelDragOver(event) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        
+        const types = Array.from(event.dataTransfer.types);
+        if (types.includes('application/x-m3u-channel')) {
+            const target = event.currentTarget;
+            target.classList.remove('drag-over-bottom');
+            target.classList.add('drag-over-top');
+        }
+    }
+
+    function channelDragLeave(event) {
+        event.target.classList.remove('drag-over-top', 'drag-over-bottom');
+    }
+
+    function channelDrop(event, targetId) {
+        event.preventDefault();
+        event.stopPropagation();
+        
+        const srcId = event.dataTransfer.getData('application/x-m3u-channel');
+        if (!srcId || srcId === targetId) return;
+        
+        // Kanäle im Array umsortieren
+        const srcIdx = state.channels.findIndex(c => c.id === srcId);
+        const targetIdx = state.channels.findIndex(c => c.id === targetId);
+        
+        if (srcIdx === -1 || targetIdx === -1) return;
+        
+        const channel = state.channels[srcIdx];
+        state.channels.splice(srcIdx, 1);
+        state.channels.splice(targetIdx, 0, channel);
+        
+        render();
+    }
+
+    function sidebarGroupDragOver(event) {
+        event.preventDefault();
+        event.currentTarget.classList.add('drag-over-group');
+    }
+
+    function sidebarGroupDragLeave(event) {
+        event.currentTarget.classList.remove('drag-over-group');
+    }
+
+    function sidebarGroupDrop(event, groupName) {
+        event.preventDefault();
+        event.currentTarget.classList.remove('drag-over-group');
+        
+        const channelId = event.dataTransfer.getData('application/x-m3u-channel');
+        if (!channelId) return;
+        
+        const ch = state.channels.find(c => c.id === channelId);
+        if (!ch) return;
+        
+        if (groupName === '__ungrouped__') {
+            ch.group = '';
+        } else {
+            ch.group = groupName;
+        }
+        
+        render();
+        showToast(`Sender der Gruppe "${groupName === '__ungrouped__' ? 'Ohne Gruppe' : groupName}" zugewiesen`, 'success');
+    }
 
     /* ========================================================
-       KEYBOARD SHORTCUTS
+       SUCHE & SORTIERUNG
     ======================================================== */
-    document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;if(e.ctrlKey&&e.key==='n'){e.preventDefault();addChannel();}if(e.ctrlKey&&e.key==='o'){e.preventDefault();importFile();}if(e.ctrlKey&&e.key==='s'){e.preventDefault();exportFile();}if(e.key==='Delete'&&state.selectedIds.size>0){e.preventDefault();batchDelete();}if(e.key==='Escape'){closeConfirm();closeEditModal();closeGroupModal();closeEpgModal();}});
+    // FIX: Debounced Suche
+    let searchTimeout = null;
+    document.getElementById('searchInput').addEventListener('input', function(e) {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            state.searchQuery = e.target.value;
+            renderChannels(); // Nur Kanäle neu rendern, nicht alles
+            renderToolbar();
+        }, 200); // 200ms Debounce
+    });
+
+    function applySort() {
+        state.sortOrder = document.getElementById('sortSelect').value;
+        renderChannels();
+    }
+
+    function setView(mode) {
+        state.viewMode = mode;
+        
+        const btnTable = document.getElementById('viewTable');
+        const btnCards = document.getElementById('viewCards');
+        
+        if (mode === 'table') {
+            btnTable.className = 'px-3 py-1 text-xs bg-accent text-bg';
+            btnCards.className = 'px-3 py-1 text-xs text-gray-500 hover:text-gray-300';
+        } else {
+            btnTable.className = 'px-3 py-1 text-xs text-gray-500 hover:text-gray-300';
+            btnCards.className = 'px-3 py-1 text-xs bg-accent text-bg';
+        }
+        
+        renderChannels();
+    }
 
     /* ========================================================
-       DRAG & DROP FILE (Global)
+       TOAST-NOTIFICATIONS
     ======================================================== */
-    document.addEventListener('dragover',e=>{e.preventDefault();if(e.dataTransfer.types.includes('Files'))document.getElementById('dropOverlay').classList.add('active');});
-    document.addEventListener('dragleave',e=>{if(e.relatedTarget===null||!document.body.contains(e.relatedTarget))document.getElementById('dropOverlay').classList.remove('active');});
-    document.addEventListener('drop',e=>{e.preventDefault();document.getElementById('dropOverlay').classList.remove('active');if(e.dataTransfer.files.length>0){const file=e.dataTransfer.files[0];if(file.name.endsWith('.m3u')||file.name.endsWith('.m3u8')||file.name.endsWith('.txt')){const reader=new FileReader();reader.onload=(ev)=>{const{channels,epgUrls}=parseM3U(ev.target.result);state.channels=channels;state.epgUrls=epgUrls;state.selectedIds.clear();render();toast(`Importiert: ${channels.length} Sender`,'success');};reader.readAsText(file,"UTF-8");}}});
+    function showToast(message, type = 'info', duration = 3000) {
+        const container = document.getElementById('toastContainer');
+        const toast = document.createElement('div');
+        
+        const bgColor = type === 'success' ? 'bg-success-dim border-success' : 
+                       type === 'error' ? 'bg-danger-dim border-danger' : 
+                       'bg-accent-dim border-accent';
+        const textColor = type === 'success' ? 'text-success' : 
+                         type === 'error' ? 'text-danger' : 'text-accent';
+        const icon = type === 'success' ? 'fa-circle-check' : 
+                    type === 'error' ? 'fa-circle-exclamation' : 'fa-circle-info';
+        
+        toast.className = `toast-enter flex items-center gap-3 px-4 py-3 rounded-xl border ${bgColor} backdrop-blur-md`;
+        toast.innerHTML = `
+            <i class="fa-solid ${icon} ${textColor}"></i>
+            <span class="text-sm ${textColor}">${escHtml(message)}</span>
+        `;
+        
+        container.appendChild(toast);
+        
+        // Auto-Remove
+        setTimeout(() => {
+            toast.classList.remove('toast-enter');
+            toast.classList.add('toast-exit');
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+        
+        // Click to dismiss
+        toast.addEventListener('click', () => {
+            toast.classList.remove('toast-enter');
+            toast.classList.add('toast-exit');
+            setTimeout(() => toast.remove(), 300);
+        });
+    }
 
     /* ========================================================
-       SEARCH
+       TASTATUR-KÜRZEL
     ======================================================== */
-    document.getElementById('searchInput').addEventListener('input',e=>{state.searchQuery=e.target.value;render();});
+    document.addEventListener('keydown', function(e) {
+        // Nur wenn kein Modal offen und kein Input fokussiert
+        const isInputFocused = document.activeElement.tagName === 'INPUT' || 
+                               document.activeElement.tagName === 'TEXTAREA' ||
+                               document.activeElement.tagName === 'SELECT';
+        const isModalOpen = !document.getElementById('confirmModal').classList.contains('hidden') ||
+                           !document.getElementById('editModal').classList.contains('hidden') ||
+                           !document.getElementById('groupModal').classList.contains('hidden') ||
+                           !document.getElementById('urlModal').classList.contains('hidden') ||
+                           !document.getElementById('epgModal').classList.contains('hidden');
+        
+        if (isInputFocused || isModalOpen) return;
+        
+        if (e.ctrlKey && e.key === 'n') {
+            e.preventDefault();
+            addChannel();
+        } else if (e.ctrlKey && e.key === 'o') {
+            e.preventDefault();
+            importFile();
+        } else if (e.ctrlKey && e.key === 's') {
+            e.preventDefault();
+            exportFile();
+        } else if (e.key === 'Escape') {
+            closeConfirm();
+            closeEditModal();
+            closeGroupModal();
+            closeUrlModal();
+            closeEpgModal();
+        } else if (e.key === 'Delete' && state.selectedIds.size > 0) {
+            e.preventDefault();
+            batchDelete();
+        }
+    });
 
     /* ========================================================
-       INIT
+       DRAG & DROP FÜR DATEI-IMPORT
     ======================================================== */
-    loadFromLocalStorage();
-    render();
+    let dragCounter = 0;
+    
+    document.addEventListener('dragenter', function(e) {
+        // Nur für Dateien (nicht für interne Drag & Drop)
+        if (e.dataTransfer.types.includes('Files')) {
+            dragCounter++;
+            document.getElementById('dropOverlay').classList.add('active');
+        }
+    });
+    
+    document.addEventListener('dragleave', function(e) {
+        if (e.dataTransfer.types.includes('Files')) {
+            dragCounter--;
+            if (dragCounter === 0) {
+                document.getElementById('dropOverlay').classList.remove('active');
+            }
+        }
+    });
+    
+    document.addEventListener('dragover', function(e) {
+        // Prevent default für Datei-Drop
+        if (e.dataTransfer.types.includes('Files')) {
+            e.preventDefault();
+        }
+    });
+    
+    document.addEventListener('drop', function(e) {
+        if (e.dataTransfer.types.includes('Files')) {
+            e.preventDefault();
+            dragCounter = 0;
+            document.getElementById('dropOverlay').classList.remove('active');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                
+                // FIX: Dateityp prüfen
+                if (!file.name.toLowerCase().match(/\.(m3u|m3u8|txt)$/)) {
+                    showToast('Nur .m3u, .m3u8 oder .txt Dateien werden unterstützt', 'error');
+                    return;
+                }
+                
+                // Datei verarbeiten
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    try {
+                        const text = ev.target.result;
+                        const result = parseM3U(text);
+                        
+                        if (result.channels.length === 0) {
+                            showToast('Keine Sender in der Datei gefunden', 'error');
+                            return;
+                        }
+                        
+                        // Merge-Import
+                        const existingUrls = new Set(state.channels.map(c => c.url));
+                        let added = 0;
+                        for (const ch of result.channels) {
+                            if (!existingUrls.has(ch.url)) {
+                                state.channels.push(ch);
+                                existingUrls.add(ch.url);
+                                added++;
+                            }
+                        }
+                        
+                        for (const epgUrl of result.epgUrls) {
+                            if (!state.epgUrls.includes(epgUrl)) {
+                                state.epgUrls.push(epgUrl);
+                            }
+                        }
+                        
+                        render();
+                        showToast(`${added} Sender importiert (${result.channels.length - added} Duplikate übersprungen)`, 'success');
+                        
+                    } catch (err) {
+                        console.error('Import-Fehler:', err);
+                        showToast('Fehler beim Importieren der Datei', 'error');
+                    }
+                };
+                
+                reader.readAsText(file);
+            }
+        }
+    });
+
+    /* ========================================================
+       INITIALISIERUNG
+    ======================================================== */
+    document.addEventListener('DOMContentLoaded', function() {
+        // FIX: Daten aus localStorage laden
+        loadFromLocalStorage();
+        
+        // Erste Render-Ausführung
+        render();
+        
+        // Willkommens-Toast wenn leer
+        if (state.channels.length === 0) {
+            setTimeout(() => {
+                showToast('Willkommen! Ziehe eine M3U-Datei hierher oder klicke auf "Import"', 'info', 5000);
+            }, 500);
+        }
+    });
+
     </script>
 </body>
 </html>
