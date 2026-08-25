@@ -38,15 +38,27 @@ function renderEpgList() {
         // FIX: Event-Listener statt Inline-Handler
         const deleteBtn = row.querySelector('button');
         deleteBtn.addEventListener('click', () => {
-            state.epgUrls.splice(i, 1);
-            renderEpgList();
-            updateEpgIndicator();
-            saveToLocalStorage();
-            showToast('EPG-URL gelöscht', 'success');
+            deleteEpgUrl(i);
         });
 
         container.appendChild(row);
     }
+}
+
+function deleteEpgUrl(index) {
+    const url = state.epgUrls[index];
+    showConfirm(
+        'EPG-URL löschen',
+        `Möchtest du die EPG-URL "${escHtml(url)}" wirklich löschen?`,
+        null,
+        () => {
+            state.epgUrls.splice(index, 1);
+            renderEpgList();
+            updateEpgIndicator();
+            saveToLocalStorage();
+            showToast('EPG-URL gelöscht', 'success');
+        }
+    );
 }
 
 function addEpgUrl() {

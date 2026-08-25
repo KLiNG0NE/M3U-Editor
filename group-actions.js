@@ -29,6 +29,17 @@ function renameGroup(groupName) {
 function deleteGroup(groupName) {
     const count = state.channels.filter(c => c.group === groupName).length;
 
+    if (count === 0 && state.selectedGroup === groupName) {
+        // Gruppe ist ausgewählt — zurück zu "Alle"
+        state.selectedGroup = '__all__';
+    }
+    render();
+    showToast('Gruppe gelöscht', 'success');
+}
+
+function deleteGroup(groupName) {
+    const count = state.channels.filter(c => c.group === groupName).length;
+
     if (count > 0) {
         showConfirm(
             'Gruppe löschen',
@@ -50,11 +61,18 @@ function deleteGroup(groupName) {
             }
         );
     } else {
-        // Keine Sender in dieser Gruppe - direkt löschen
-        state.groupOrder = state.groupOrder.filter(g => g !== groupName);
-        if (state.selectedGroup === groupName) state.selectedGroup = '__all__';
-        render();
-        showToast('Gruppe gelöscht', 'success');
+        // Keine Sender in dieser Gruppe — auch hier Bestätigung
+        showConfirm(
+            'Gruppe löschen',
+            `Möchtest du die leere Gruppe "${groupName}" wirklich löschen?`,
+            null,
+            () => {
+                if (state.selectedGroup === groupName) state.selectedGroup = '__all__';
+                state.groupOrder = state.groupOrder.filter(g => g !== groupName);
+                render();
+                showToast('Gruppe gelöscht', 'success');
+            }
+        );
     }
 }
 
